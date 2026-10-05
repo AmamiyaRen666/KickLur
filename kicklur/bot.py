@@ -303,7 +303,7 @@ class KickLurBot:
             run = REGISTRY.get(int(parts[1]))
             page = int(parts[2]) if len(parts) > 2 else 0
             if run:
-                text, kb = ui.device_panel(run, page=page)
+                text, kb = ui.run_device_panel(run, page=page)
                 self.tg.edit(chat_id, mid, text, kb, parse_mode="HTML")
 
         # ── pause / resume ────────────────────────────────────────────────
@@ -318,9 +318,8 @@ class KickLurBot:
                 return
             did = run.order[i]                      # id, not position
             REGISTRY.toggle_device(run.run_id, did)
-            # re-render the device panel so the new state is visible at once
-            page = i // 8
-            text, kb = ui.device_panel(run, page=page)
+            # re-render the panel page that actually holds this device
+            text, kb = ui.run_device_panel(run, page=ui.page_of_device(run, i))
             self.tg.edit(chat_id, mid, text, kb, parse_mode="HTML")
 
         elif data.startswith("pauseall:"):

@@ -161,27 +161,158 @@ def device_panel(run, page=0, per_page=8):
     return "\n".join(lines), {"inline_keyboard": rows}
 
 
-def device_list_view(devices, page=0, per_page=20):
+def device_list_view(devices, page=0, budget=3000):
+    """Full device ids, one per line, paginated by character budget.
+
+    The id is shown whole (never truncated) inside <code> so a tap copies it,
+    and the page size is computed from the real text length so a long id can
+    never push a message past Telegram's 4096-character limit.
+    """
+    lines_all = [f"{i}. <code>{did}</code>" for i, did in enumerate(devices, 1)]
+    pages, idx = [], 0
+    while idx < len(lines_all) or not pages:
+        chunk, used = [], 0
+        while idx < len(lines_all):
+            ln = len(lines_all[idx]) + 1
+            if chunk and used + ln > budget:
+                break
+            chunk.append(idx)
+            used += ln
+            idx += 1
+        if not chunk:                      # a single line longer than budget
+            chunk = [idx]
+            idx += 1
+        pages.append(chunk)
+
+    page = max(0, min(page, len(pages) - 1))
     total = len(devices)
-    pages = max(1, (total + per_page - 1) // per_page)
-    page = max(0, min(page, pages - 1))
-    chunk = devices[page * per_page:(page + 1) * per_page]
-    lines = [f"📋 <b>Device List</b>\n<code>{BAR}</code>",
-             f"Total <b>{total}</b> · hal {page + 1}/{pages}\n"]
-    for i, did in enumerate(chunk, start=page * per_page + 1):
-        lines.append(f"{i}. <code>…{did[-18:]}</code>")
+    out = [f"📋 <b>Device List</b> (full)",
+           f"<code>{BAR}</code>",
+           f"Total <b>{total}</b> · hal {page + 1}/{len(pages)}",
+           "Tap baris buat salin ID-nya.", ""]
     if not devices:
-        lines.append("(kosong — kirim device id atau upload .txt)")
+        out.append("(kosong — kirim device id atau upload .txt)")
+    for i in pages[page]:
+        out.append(lines_all[i])
+
     kb_rows = []
     nav = []
-    if pages > 1:
-        nav.append({"text": "« Prev", "callback_data": f"list:{page-1}"})
-        nav.append({"text": f"{page+1}/{pages}", "callback_data": "noop"})
-        nav.append({"text": "Next »", "callback_data": f"list:{page+1}"})
+    if len(pages) > 1:
+        if page > 0:
+            nav.append({"text": "« Prev", "callback_data": f"list:{page-1}"})
+        nav.append({"text": f"{page+1}/{len(pages)}", "callback_data": "noop"})
+        if page < len(pages) - 1:
+            nav.append({"text": "Next »", "callback_data": f"list:{page+1}"})
     if nav:
         kb_rows.append(nav)
     kb_rows.append([{"text": "🏠 Menu", "callback_data": "menu"}])
-    return "\n".join(lines), {"inline_keyboard": kb_rows}
+    return "\n".join(out), {"inline_keyboard": kb_rows}
+
+
+def _paginate(entries, key, budget):
+    """Split entries into pages whose rendered length fits the budget."""
+    pages, idx = [], 0
+    while idx < len(entries) or not pages:
+        chunk, used = [], 0
+        while idx < len(entries):
+            ln = len(key(entries[idx])) + 1
+            if chunk and used + ln > budget:
+                break
+            chunk.append(entries[idx])
+            used += ln
+            idx += 1
+        if not chunk:                      # a single entry longer than budget
+            chunk = [entries[idx]]
+            idx += 1
+        pages.append(chunk)
+    return pages
+
+
+def run_device_panel(run, page=0, budget=2600):
+    """Per-device panel: FULL id plus account id and nickname, copyable.
+
+    Each entry is one line pair:
+        <mark> <n>. <account id> | <nickname>
+            <full device id>
+    Buttons carry the device INDEX in run.order, which is stable for the whole
+    run, so a pause always lands on the device the user actually tapped.
+    """
+    entries = []
+    for i, did in enumerate(run.order):
+        d = run.devices[did]
+        name = d.nick or (str(d.acc) if d.acc else "—")
+        acc = str(d.acc) if d.acc else "—"
+        entries.append({
+            "i": i, "d": d, "did": did, "acc": acc, "name": name,
+            "text": f"{i + 1}. {d.mark} {acc} | {name}\n<code>{did}</code>",
+        })
+
+    pages = _paginate(entries, lambda e: e["text"], budget)
+    page = max(0, min(page, len(pages) - 1))
+    n_run = len(run.running_devices())
+    n_pause = len(run.paused_devices())
+    out = [
+        f"📋 <b>Device</b> · Run #{run.run_id}",
+        f"<code>{BAR}</code>",
+        f"🟢 jalan <b>{n_run}</b> · ⏸ pause <b>{n_pause}</b> · "
+        f"total <b>{len(entries)}</b>",
+        f"hal {page + 1}/{len(pages)} · <b>klik tombol = pause/lanjut</b>",
+        "",
+    ]
+    if not entries:
+        out.append("(belum ada device)")
+    for e in pages[page]:
+        out.append(e["text"])
+    out += ["", f"<code>{BAR}</code>", "Format: <b>ID | nama</b> + device id"]
+
+    rows = []
+    for e in pages[page]:
+        label = f"{e['d'].mark} {e['i'] + 1}. {e['acc']} · {e['name'][:14]}"
+        rows.append([{"text": label,
+                      "callback_data": f"tog:{run.run_id}:{e['i']}"}])
+    if len(pages) > 1:
+        nav = []
+        if page > 0:
+            nav.append({"text": "« Prev",
+                        "callback_data": f"dev:{run.run_id}:{page-1}"})
+        nav.append({"text": f"{page+1}/{len(pages)}", "callback_data": "noop"})
+        if page < len(pages) - 1:
+            nav.append({"text": "Next »",
+                        "callback_data": f"dev:{run.run_id}:{page+1}"})
+        rows.append(nav)
+    rows.append([{"text": "📊 Status", "callback_data": f"st:{run.run_id}"},
+                 {"text": "🏠 Menu", "callback_data": "menu"}])
+    return "\n".join(out), {"inline_keyboard": rows}
+
+
+def page_of_device(run, index, budget=2600):
+    """Which panel page holds this device index (panel pages by text length)."""
+    entries = [{"i": i} for i in range(len(run.order))]
+    lengths = {}
+    for i, did in enumerate(run.order):
+        d = run.devices[did]
+        name = d.nick or (str(d.acc) if d.acc else "—")
+        acc = str(d.acc) if d.acc else "—"
+        lengths[i] = len(f"{i + 1}. {d.mark} {acc} | {name}\n<code>{did}</code>")
+    pages, idx = [], 0
+    while idx < len(entries) or not pages:
+        chunk, used = [], 0
+        while idx < len(entries):
+            ln = lengths[idx] + 1
+            if chunk and used + ln > budget:
+                break
+            chunk.append(idx)
+            used += ln
+            idx += 1
+        if not chunk:
+            chunk = [idx]
+            idx += 1
+        pages.append(chunk)
+    for p, chunk in enumerate(pages):
+        if index in chunk:
+            return p
+    return 0
+
 
 
 def info_view():
