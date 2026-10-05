@@ -52,6 +52,10 @@ pembandingnya.
 | `BF_MAX_CONCURRENCY` | — | `40` | batas kick simultan total |
 | `BF_MAX_DEVICES` | — | `2000` | batas device per chat |
 | `BF_KICK_DELAY` | — | `0.5` | jeda antar kick (detik) |
+| `BF_KICK_ALL_SERVERS` | — | `1` | nembak ke **semua** game server yang diketahui, paralel |
+| `BF_ACK_WAIT` | — | `1.5` | detik nunggu ACK dari server (`0` = nggak nunggu) |
+| `MLBB_GS_SEED` | — | kosong | alamat game server awal, dipisah koma |
+| `MLBB_LOOKUP_TRIES` | — | `3` | berapa kali minta nama sebelum menyerah |
 | `BF_LOOKUP` | — | `1` | resolve nama pemain |
 | `MLBB_OPEN_TIMEOUT` | — | `5` | timeout connect |
 | `MLBB_KICK_TIMEOUT` | — | `4.5` | timeout kick (nilai asli) |

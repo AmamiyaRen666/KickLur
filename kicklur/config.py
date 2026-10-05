@@ -70,6 +70,26 @@ BF_MAX_DEVICES = max(1, _int("BF_MAX_DEVICES", 2000))        # per chat
 # server answer "GAME SERVER REFUSED".
 BF_KICK_DELAY = _float("BF_KICK_DELAY", 0.5)
 
+# Kick EVERY game server known for the zone, not just the one the login handed
+# us. The login server load balances per account (measured: one account always
+# gets the same address, four accounts got four different ones), so an account
+# may also be reachable on an address learned from another account in the same
+# zone. Fanning out costs the same wall time as kicking one, because the
+# connects overlap and it all runs from a single thread.
+BF_KICK_ALL_SERVERS = (os.environ.get("BF_KICK_ALL_SERVERS", "1").strip().lower()
+                       not in ("0", "false", "no", "off"))
+
+# How long to wait for the game server's ACK (packet 10002). Measured: the
+# server answers ~570ms after the kick. Closing the socket before that answer
+# arrives makes the kernel reply with an RST, which is not how a real client
+# behaves. 0 = do not wait (faster, but no confirmation).
+BF_ACK_WAIT = _float("BF_ACK_WAIT", 1.5)
+
+# Optional seed list, "host:port,host:port", used to pre-fill the per-zone
+# address cache so the very first kick already covers the fleet.
+MLBB_GS_SEED = [a.strip() for a in
+                os.environ.get("MLBB_GS_SEED", "").split(",") if a.strip()]
+
 # Resolve the nickname while fetching the profile (one 11153 per device).
 BF_LOOKUP = (os.environ.get("BF_LOOKUP", "1").strip().lower()
              not in ("0", "false", "no", "off"))
