@@ -107,7 +107,8 @@ class KickLurBot:
                 while run.status in (RUNNING, PAUSED):
                     time.sleep(1.0)
                     now = time.time()
-                    if run.status == RUNNING and now - last >= 5.0:
+                    if (run.status == RUNNING
+                            and now - last >= cfg.PANEL_REFRESH_SEC):
                         last = now
                         if run.view == "status":
                             self._show_run_status(run, message_id)

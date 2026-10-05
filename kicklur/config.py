@@ -80,7 +80,16 @@ KICK_TIMEOUT = _float("MLBB_KICK_TIMEOUT", 4.5)    # source Brute.kick: 4.5s
 FETCH_ATTEMPTS = max(1, _int("MLBB_FETCH_ATTEMPTS", 3))  # source range(3)
 
 # ── Telegram pacing ────────────────────────────────────────────────────────
+# Global: minimum gap between ANY two outgoing calls.
 TG_MIN_INTERVAL = _float("TG_MIN_INTERVAL", 0.12)
+# Per chat: minimum gap between two calls to the SAME chat. Telegram limits per
+# chat (~1 msg/s sustained, ~20/min in practice) and every run in that chat
+# shares the budget, so this is the value that actually prevents a 429.
+# 3.0s => at most 20 calls/minute per chat, which is the documented ceiling.
+TG_CHAT_MIN_INTERVAL = _float("TG_CHAT_MIN_INTERVAL", 3.0)
+# How often the run panel refreshes itself while it is on screen. The panel is
+# only refreshed while it still shows Status, so this is the "live" tick rate.
+PANEL_REFRESH_SEC = _float("PANEL_REFRESH_SEC", 15.0)
 PORT_HTTP = _int("PORT", 0)
 
 

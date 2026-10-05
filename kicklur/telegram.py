@@ -1,8 +1,18 @@
 """Telegram client: long poll + paced sends, with 429 handling.
 
 Deliberately minimal — no framework, so the Railway image stays small and the
-bot has no hidden scheduler. Every outgoing call goes through one lock with a
-minimum interval, so a run can never trip the per-chat flood limit.
+bot has no hidden scheduler.
+
+Two pacers, because one is not enough:
+
+  * a global one (TG_MIN_INTERVAL) that keeps total calls sane;
+  * a PER-CHAT one (TG_CHAT_MIN_INTERVAL) that keeps any single chat from
+    being hammered. Telegram limits per chat (~1 message/second sustained,
+    ~20/minute in practice), and several runs in one chat share that budget,
+    so the per-chat pacer is what actually prevents a 429.
+
+A 429 (retry_after) sets flood_until, and every later call waits it out
+instead of retrying into the wall.
 """
 import json
 import threading
@@ -22,6 +32,7 @@ class Telegram:
         self._url = f"{API}/bot{token}"
         self._lock = threading.Lock()
         self._last_send = 0.0
+        self._chat_last = {}          # chat_id -> last call time
         self._offset = None
         self.flood_until = 0.0
 
@@ -67,7 +78,8 @@ class Telegram:
         parts.append(f"--{boundary}--\r\n".encode())
         return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
-    def _pace(self):
+    def _pace(self, chat_id=None):
+        """Wait for the global and per-chat budgets, then stamp both."""
         with self._lock:
             now = time.time()
             if now < self.flood_until:
@@ -76,6 +88,12 @@ class Telegram:
             gap = now - self._last_send
             if gap < cfg.TG_MIN_INTERVAL:
                 time.sleep(cfg.TG_MIN_INTERVAL - gap)
+            if chat_id is not None:
+                last = self._chat_last.get(chat_id, 0.0)
+                gap_c = time.time() - last
+                if gap_c < cfg.TG_CHAT_MIN_INTERVAL:
+                    time.sleep(cfg.TG_CHAT_MIN_INTERVAL - gap_c)
+                self._chat_last[chat_id] = time.time()
             self._last_send = time.time()
 
     # ── api ────────────────────────────────────────────────────────────────
@@ -83,7 +101,7 @@ class Telegram:
         return self._call("getMe")
 
     def send(self, chat_id, text, keyboard=None, parse_mode=None):
-        self._pace()
+        self._pace(chat_id)
         p = {"chat_id": chat_id, "text": text[:4096],
              "disable_web_page_preview": "true"}
         if parse_mode:
@@ -93,7 +111,7 @@ class Telegram:
         return self._call("sendMessage", p)
 
     def edit(self, chat_id, message_id, text, keyboard=None, parse_mode=None):
-        self._pace()
+        self._pace(chat_id)
         p = {"chat_id": chat_id, "message_id": message_id, "text": text[:4096],
              "disable_web_page_preview": "true"}
         if parse_mode:
@@ -106,11 +124,15 @@ class Telegram:
         return r
 
     def answer_callback(self, callback_id, text=""):
+        # A callback answer is not a chat message, so it is not subject to the
+        # per-chat message limit — but it still must not be unbounded. The
+        # global pacer applies; the per-chat one does not.
+        self._pace(None)
         return self._call("answerCallbackQuery",
                           {"callback_query_id": callback_id, "text": text[:200]})
 
     def send_document(self, chat_id, filename, data, caption=""):
-        self._pace()
+        self._pace(chat_id)
         p = {"chat_id": chat_id}
         if caption:
             p["caption"] = caption[:1000]
@@ -144,3 +166,4 @@ class Telegram:
             self._offset = upd["update_id"] + 1
             out.append(upd)
         return out
+
