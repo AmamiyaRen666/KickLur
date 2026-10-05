@@ -153,21 +153,32 @@ class Game:
         return False
 
     # -- source: lookup() -------------------------------------------------
-    def lookup(self, rid):
-        """11153 -> 11154. Scans up to 2 frames, skips 20001, retries a timeout once."""
-        self.conn.send(11153, SdpStruct({1: int(rid)}))
-        for _ in range(3):
-            pid, res = self.conn.recv()
-            if pid == 11154 and res:
-                return res
-            if pid == 20001:
-                continue
-            if pid == -1:
-                self.conn.send(11153, SdpStruct({1: int(rid)}))
-                continue
-            if pid is None:
-                return None
-        return None
+    def lookup(self, rid, tries=None):
+        """11153 -> 11154, reading the nickname out of the reply.
+
+        Returns the nickname string, or "" when it could not be read. Scans a
+        few frames, skips 20001, and retries a timeout. The frame budget is
+        generous because a miss here is what used to produce a fake
+        "Player_<acc>" name in the panel.
+        """
+        tries = tries or cfg.LOOKUP_TRIES
+        for attempt in range(tries):
+            self.conn.send(11153, SdpStruct({1: int(rid)}))
+            for _ in range(4):
+                pid, res = self.conn.recv()
+                if pid == 20001:
+                    continue
+                if pid == -1:
+                    break                      # timeout: re-send and try again
+                if pid is None:
+                    return ""
+                if pid != 11154 or not res:
+                    continue
+                nick = _read_nick(res)
+                if nick:
+                    return nick
+                break                          # got the frame, no name in it
+        return ""
 
     # -- source: skin() ---------------------------------------------------
     def skin(self, rid, zid):
@@ -207,6 +218,46 @@ class Game:
 
 
 # ── profile + kick ─────────────────────────────────────────────────────────
+def _read_nick(res):
+    """Pull the nickname out of a 11154 reply.
+
+    Measured shape: field 0 is a list whose first element is a struct with the
+    name in field 2, e.g. {0: [{0: <acc>, 1: <zone>, 2: '<nick>'}]}. Some
+    replies nest the same struct in field 6/5 as raw bytes, so those are
+    unwrapped too. Returns "" when there is no usable name.
+    """
+    if not res:
+        return ""
+    candidates = []
+    lst = res.get(0)
+    if isinstance(lst, list) and lst:
+        candidates.append(lst[0])
+    elif isinstance(lst, (dict,)) or hasattr(lst, "get"):
+        candidates.append(lst)
+    raw = res.get(6) or res.get(5)
+    if isinstance(raw, bytes):
+        try:
+            inner = SdpStruct(raw)
+            inner_lst = inner.get(0)
+            if isinstance(inner_lst, list) and inner_lst:
+                candidates.append(inner_lst[0])
+            else:
+                candidates.append(inner)
+        except Exception:
+            pass
+    for c in candidates:
+        if c is None:
+            continue
+        name = None
+        if hasattr(c, "get"):
+            name = c.get(2)
+        if isinstance(name, dict):
+            name = name.get(0)
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return ""
+
+
 class ProfileError(Exception):
     def __init__(self, reason, detail="", retryable=False):
         super().__init__(reason)
@@ -241,18 +292,12 @@ def fetch_profile(device_id, attempts=None):
 
             nick = ""
             skin = {}
-            res = g.lookup(g.acc)
-            if res:
-                lst = res.get(0)
-                if isinstance(lst, list) and lst:
-                    first = lst[0]
-                    if isinstance(first, dict):
-                        nick = first.get(2) or ""
-                        # the nickname may come back as a nested struct
-                        if isinstance(nick, dict):
-                            nick = nick.get(0) or ""
-            if not nick:
-                nick = f"Player_{g.acc}"
+            if cfg.BF_LOOKUP:
+                nick = g.lookup(g.acc)
+            # No invented name. If the lookup did not return one, the panel
+            # shows "-" so a failed lookup is never mistaken for a real
+            # nickname (it used to print "Player_<acc>", which read like a
+            # genuine name and hid the failure).
 
             sr = g.skin(g.acc, g.zid)
             if sr:

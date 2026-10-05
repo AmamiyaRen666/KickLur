@@ -240,8 +240,15 @@ def run_device_panel(run, page=0, budget=2600):
     entries = []
     for i, did in enumerate(run.order):
         d = run.devices[did]
-        name = d.nick or (str(d.acc) if d.acc else "—")
         acc = str(d.acc) if d.acc else "—"
+        # Three distinct states, so a failed lookup never looks like a name:
+        #   a real nickname, "belum dicek" (no kick yet), "?" (kicked, no name)
+        if d.nick:
+            name = d.nick
+        elif d.kicks == 0:
+            name = "belum dicek"
+        else:
+            name = "? (nama nggak kebaca)"
         entries.append({
             "i": i, "d": d, "did": did, "acc": acc, "name": name,
             "text": f"{i + 1}. {d.mark} {acc} | {name}\n<code>{did}</code>",
@@ -291,8 +298,13 @@ def page_of_device(run, index, budget=2600):
     lengths = {}
     for i, did in enumerate(run.order):
         d = run.devices[did]
-        name = d.nick or (str(d.acc) if d.acc else "—")
         acc = str(d.acc) if d.acc else "—"
+        if d.nick:
+            name = d.nick
+        elif d.kicks == 0:
+            name = "belum dicek"
+        else:
+            name = "? (nama nggak kebaca)"
         lengths[i] = len(f"{i + 1}. {d.mark} {acc} | {name}\n<code>{did}</code>")
     pages, idx = [], 0
     while idx < len(entries) or not pages:

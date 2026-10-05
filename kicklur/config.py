@@ -73,6 +73,9 @@ BF_KICK_DELAY = _float("BF_KICK_DELAY", 0.5)
 # Resolve the nickname while fetching the profile (one 11153 per device).
 BF_LOOKUP = (os.environ.get("BF_LOOKUP", "1").strip().lower()
              not in ("0", "false", "no", "off"))
+# How many times to ask for the nickname before giving up. A miss used to be
+# silent (the panel showed a fabricated "Player_<acc>"); now it shows "-".
+LOOKUP_TRIES = max(1, _int("MLBB_LOOKUP_TRIES", 3))
 
 # ── Timeouts (source values kept where they existed) ───────────────────────
 OPEN_TIMEOUT = _float("MLBB_OPEN_TIMEOUT", 5)      # source Conn.open: 5s
