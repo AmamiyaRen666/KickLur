@@ -74,6 +74,13 @@ class Run:
     latencies: list = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     workers_alive: int = 0
+    # What the run's message currently shows. The background updater only
+    # touches the message while it is still showing "status"; once the user
+    # opens the device panel the updater leaves it alone, so a message never
+    # changes under the user's hands.
+    view: str = "status"
+    edit_lock: threading.Lock = field(default_factory=threading.Lock)
+    last_panel_text: str = ""
 
     @property
     def elapsed(self):

@@ -56,19 +56,46 @@ class KickLurBot:
         return None
 
     def _show_run_status(self, run, message_id=None):
+        """Render the status panel. Marks the message as showing 'status'."""
         text, kb = ui.run_status(run)
-        if message_id:
+        run.view = "status"
+        with run.edit_lock:
+            if text == run.last_panel_text:
+                return
+            run.last_panel_text = text
+            if message_id:
+                self.tg.edit(run.chat_id, message_id, text, kb, parse_mode="HTML")
+            else:
+                self.tg.send(run.chat_id, text, kb, parse_mode="HTML")
+
+    def _show_run_device_panel(self, run, message_id, page=0):
+        """Render the device panel. Marks the message so the background
+        updater stops rewriting it."""
+        text, kb = ui.run_device_panel(run, page=page)
+        run.view = "devices"
+        with run.edit_lock:
+            run.last_panel_text = text
             self.tg.edit(run.chat_id, message_id, text, kb, parse_mode="HTML")
-        else:
-            self.tg.send(run.chat_id, text, kb, parse_mode="HTML")
 
     def _show_run_results(self, run, message_id, page=0):
         text, kb = ui.run_results(run, page=page)
-        self.tg.edit(run.chat_id, message_id, text, kb, parse_mode="HTML")
+        run.view = "results"
+        with run.edit_lock:
+            run.last_panel_text = text
+            self.tg.edit(run.chat_id, message_id, text, kb, parse_mode="HTML")
 
     # ── live watcher ───────────────────────────────────────────────────────
     def _watch(self, run, message_id):
-        """Refresh the run panel while it runs; finalise when it ends."""
+        """Refresh the run panel while it runs, then finalise once.
+
+        Two rules stop the message from "editing itself" under the user:
+
+          * only refresh while the message still shows the status panel — if
+            the user has opened the device panel or the results, that view is
+            left alone;
+          * never write a panel identical to the last one written, so an idle
+            run produces no edits at all.
+        """
         with self._watch_lock:
             if run.run_id in self._watching:
                 return
@@ -82,8 +109,13 @@ class KickLurBot:
                     now = time.time()
                     if run.status == RUNNING and now - last >= 5.0:
                         last = now
-                        self._show_run_status(run, message_id)
-                self._show_run_status(run, message_id)
+                        if run.view == "status":
+                            self._show_run_status(run, message_id)
+                # finalise once, whichever view is on screen
+                if run.view == "status":
+                    self._show_run_status(run, message_id)
+                elif run.view == "devices":
+                    self._show_run_device_panel(run, message_id, 0)
             except Exception:
                 pass
             finally:
@@ -303,8 +335,7 @@ class KickLurBot:
             run = REGISTRY.get(int(parts[1]))
             page = int(parts[2]) if len(parts) > 2 else 0
             if run:
-                text, kb = ui.run_device_panel(run, page=page)
-                self.tg.edit(chat_id, mid, text, kb, parse_mode="HTML")
+                self._show_run_device_panel(run, mid, page=page)
 
         # ── pause / resume ────────────────────────────────────────────────
         elif data.startswith("tog:"):
@@ -319,8 +350,7 @@ class KickLurBot:
             did = run.order[i]                      # id, not position
             REGISTRY.toggle_device(run.run_id, did)
             # re-render the panel page that actually holds this device
-            text, kb = ui.run_device_panel(run, page=ui.page_of_device(run, i))
-            self.tg.edit(chat_id, mid, text, kb, parse_mode="HTML")
+            self._show_run_device_panel(run, mid, page=ui.page_of_device(run, i))
 
         elif data.startswith("pauseall:"):
             rid = int(data.split(":")[1])
