@@ -33,8 +33,9 @@ def main_menu(n_devices, active_runs):
         f"📱 Device   : <b>{n_devices}</b>\n"
         f"▶️ Run aktif: <b>{active_runs}</b>\n"
         f"<code>{BAR}</code>\n"
-        f"Worker <b>{cfg.BF_WORKERS}</b>/run · maks <b>{cfg.BF_MAX_CONCURRENCY}</b> · "
-        f"jeda <b>{cfg.BF_KICK_DELAY}s</b>"
+        f"START KICK langsung jalan:\n"
+        f"loop <b>∞</b> · jeda <b>{cfg.BF_KICK_DELAY}s</b> · "
+        f"worker <b>{cfg.BF_WORKERS}</b>"
     )
     kb = {"inline_keyboard": [
         [{"text": "▶️ START KICK", "callback_data": "start"}],
@@ -43,7 +44,8 @@ def main_menu(n_devices, active_runs):
         [{"text": "📊 Status", "callback_data": "status"},
          {"text": "⛔ STOP SEMUA", "callback_data": "stopall"}],
         [{"text": "🗑 Reset List", "callback_data": "reset"},
-         {"text": "ℹ️ Info", "callback_data": "info"}],
+         {"text": "⚙️ Setelan", "callback_data": "settings"}],
+        [{"text": "ℹ️ Info", "callback_data": "info"}],
     ]}
     return text, kb
 
@@ -53,7 +55,8 @@ def ask_loops():
         "🔁 <b>Berapa loop?</b>\n"
         f"<code>{BAR}</code>\n"
         "1 loop = 1 kick. Device diputar bergantian.\n\n"
-        "Kirim angka, atau <b>0</b> untuk <b>unlimited</b>."
+        "Kirim angka, atau <b>0</b> untuk <b>unlimited</b>.\n"
+        "Kalau nggak mau ubah, klik 🏠 Menu — START KICK tetap pakai ∞."
     )
     return text, {"inline_keyboard": [[{"text": "« Batal", "callback_data": "menu"}]]}
 

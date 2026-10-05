@@ -315,6 +315,13 @@ class KickLurBot:
             if not self.devices.get(chat_id):
                 self.tg.send(chat_id, "❌ List device masih kosong.")
                 return
+            # Start immediately with the defaults: unlimited loops and the
+            # configured delay. No wizard — pressing START KICK kicks.
+            self.step[chat_id] = MENU
+            self._start_run(chat_id, cfg.BF_KICK_DELAY, 0)
+
+        elif data == "settings":
+            # Optional path: only for changing loops/delay deliberately.
             self.step[chat_id] = WANT_LOOPS
             text, kb = ui.ask_loops()
             self.tg.edit(chat_id, mid, text, kb, parse_mode="HTML")

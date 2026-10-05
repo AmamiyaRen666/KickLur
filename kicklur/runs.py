@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import config as cfg
-from .engine import kick_once
+from .engine import cached_name, kick_once
 
 RUNNING = "running"
 PAUSED = "paused"
@@ -130,7 +130,16 @@ class RunRegistry:
             run = Run(run_id=run_id, chat_id=chat_id, message_id=message_id,
                       total_loops=total_loops, delay_sec=delay_sec)
             for did in device_ids:
-                run.devices[did] = DeviceState(device_id=did)
+                d = DeviceState(device_id=did)
+                # Seed from the name cache so a device already resolved in an
+                # earlier run shows its name immediately, instead of "?" until
+                # the first kick lands.
+                c_acc, c_nick = cached_name(device_id=did)
+                if c_nick:
+                    d.nick = c_nick
+                    if c_acc:
+                        d.acc = c_acc
+                run.devices[did] = d
                 run.order.append(did)
             self._runs[run_id] = run
             return run

@@ -258,6 +258,44 @@ def _read_nick(res):
     return ""
 
 
+# ── name cache ─────────────────────────────────────────────────────────────
+# device_id -> (acc, nick) and acc -> nick. A run used to start with a blank
+# slate, so a name resolved in one run showed as "?" in the next and the user
+# had to scroll up to find it. The cache is keyed by device id and by account
+# id so either one can restore the name.
+_NAME_BY_DEVICE = {}
+_NAME_BY_ACC = {}
+_NAME_CACHE_MAX = 20000
+_NAME_LOCK = threading.Lock()
+
+
+def cache_name(device_id=None, acc=None, nick=None):
+    """Remember a resolved name. Ignores empty names."""
+    if not nick or not str(nick).strip():
+        return
+    nick = str(nick).strip()
+    with _NAME_LOCK:
+        if device_id:
+            if len(_NAME_BY_DEVICE) >= _NAME_CACHE_MAX:
+                _NAME_BY_DEVICE.clear()
+            _NAME_BY_DEVICE[device_id] = (acc, nick)
+        if acc:
+            if len(_NAME_BY_ACC) >= _NAME_CACHE_MAX:
+                _NAME_BY_ACC.clear()
+            _NAME_BY_ACC[acc] = nick
+
+
+def cached_name(device_id=None, acc=None):
+    """(acc, nick) from the cache, or (None, ""). Device id wins over acc."""
+    with _NAME_LOCK:
+        if device_id and device_id in _NAME_BY_DEVICE:
+            a, n = _NAME_BY_DEVICE[device_id]
+            return (a, n)
+        if acc and acc in _NAME_BY_ACC:
+            return (acc, _NAME_BY_ACC[acc])
+    return (None, "")
+
+
 class ProfileError(Exception):
     def __init__(self, reason, detail="", retryable=False):
         super().__init__(reason)
@@ -294,8 +332,17 @@ def fetch_profile(device_id, attempts=None):
             skin = {}
             if cfg.BF_LOOKUP:
                 nick = g.lookup(g.acc)
+            # Reuse a name resolved earlier (another run, or an earlier loop)
+            # instead of starting blank — that is what made the same device
+            # show "?" in a new run while the name sat in an older message.
+            if not nick:
+                _c_acc, _c_nick = cached_name(g.dev, g.acc)
+                if _c_nick:
+                    nick = _c_nick
+            if nick:
+                cache_name(device_id=g.dev, acc=g.acc, nick=nick)
             # No invented name. If the lookup did not return one, the panel
-            # shows "-" so a failed lookup is never mistaken for a real
+            # shows "?" so a failed lookup is never mistaken for a real
             # nickname (it used to print "Player_<acc>", which read like a
             # genuine name and hid the failure).
 
