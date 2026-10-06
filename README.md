@@ -10,11 +10,11 @@ dijalankan di Railway.
 
 - **List device akumulatif** — kirim id satu-satu atau upload `.txt`, list-nya
   **nambah**, nggak nimpa. Ada tombol Reset kalau mau mulai dari nol.
-- **Start langsung** — tekan ▶️ Mulai Kick, langsung jalan (unlimited). Nggak ada
+- **Start langsung** — tekan ▶️ START KICK, langsung jalan (unlimited). Nggak ada
   wizard, nggak perlu pilih loop.
 - **Run paralel** — tiap run jalan sendiri. Nambah device/run baru **nggak**
   menghentikan run yang sudah jalan.
-- **Hapus device** — buka 🗑 Hapus buat pause/lanjut **per device** (sementara,
+- **Hapus device** — buka 📋 Device buat pause/lanjut **per device** (sementara,
   bisa di-resume), atau hapus semua sekaligus.
 - **Worker pool, bukan batch** — tiap device "jalan sendiri": begitu ada worker
   kosong dia langsung ambil device berikutnya. Jadi satu device yang lambat
@@ -95,9 +95,9 @@ rata antar run — 4 run × `BF_MAX_CONCURRENCY=40` = **10 slot per run**.
 ## Cara pakai
 
 1. Kirim device id (teks atau file .txt) — list-nya **nambah**, nggak nimpa
-2. Tekan ▶️ Mulai Kick → langsung jalan (unlimited)
+2. Tekan ▶️ START KICK → langsung jalan (unlimited)
 3. Tekan 📊 Status buat lihat progress
-4. Tekan 🗑 Hapus buat pause/lanjut/hapus device
+4. Tekan 📋 Device buat pause/lanjut/hapus device
 
 Tanda di menu: `🟢` jalan · `⏸` pause · `✅` sudah kena kick · `⏹` dihapus.
 
