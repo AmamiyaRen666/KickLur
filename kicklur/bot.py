@@ -36,7 +36,10 @@ class KickLurBot:
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _allowed(self, chat_id):
-        return str(chat_id) in cfg.ALLOWED_IDS
+        allowed = set(cfg.ALLOWED_IDS)
+        if cfg.OWNER_CHAT_ID:
+            allowed.add(str(cfg.OWNER_CHAT_ID))
+        return str(chat_id) in allowed
 
     def _bg(self, fn, *args, **kwargs):
         """Run a Telegram-touching function off the polling thread."""
