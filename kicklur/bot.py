@@ -196,7 +196,7 @@ class KickLurBot:
         chat_id = str((q.get("message") or {}).get("chat", {}).get("id", ""))
         data = q.get("data") or ""
         mid = (q.get("message") or {}).get("message_id")
-        self._bg(self.tg.answer_callback, q["id"])
+        self._bg(self.tg.answer, q["id"])
         if not self._allowed(chat_id):
             return
         self._bg(self._do_callback, chat_id, mid, data)
