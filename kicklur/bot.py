@@ -393,7 +393,8 @@ class KickLurBot:
     def poll_forever(self):
         while True:
             try:
-                for upd in self.tg.poll():
+                for upd in self.tg.poll(offset=self.offset + 1):
+                    self.offset = max(self.offset, upd.get("update_id", 0))
                     try:
                         self.handle(upd)
                     except Exception as e:
