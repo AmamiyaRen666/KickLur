@@ -52,8 +52,8 @@ class KickLurBot:
         else:
             self.tg.send(run.chat_id, text, kb)
 
-    def _show_run_device_panel(self, run, message_id, page=0):
-        text, kb = ui.device_panel(run, page=page)
+    def _show_run_device_panel(self, run, message_id):
+        text, kb = ui.device_panel(run)
         self.tg.edit(run.chat_id, message_id, text, kb)
 
     # ── dispatch ───────────────────────────────────────────────────────────
@@ -263,9 +263,8 @@ class KickLurBot:
         elif data.startswith("dev:"):
             parts = data.split(":")
             run = self.registry.get(chat_id, int(parts[1]))
-            page = int(parts[2]) if len(parts) > 2 else 0
             if run:
-                self._show_run_device_panel(run, mid, page=page)
+                self._show_run_device_panel(run, mid)
 
         elif data.startswith("tog:"):
             _, rid, idx = data.split(":")
@@ -278,7 +277,7 @@ class KickLurBot:
                 return
             did = run.devices[i]
             state = run.toggle_pause(did)
-            self._show_run_device_panel(run, mid, page=ui.page_of_device(run, i))
+            self._show_run_device_panel(run, mid)
 
         elif data.startswith("pauseall:"):
             rid = int(data.split(":")[1])

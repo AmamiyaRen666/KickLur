@@ -96,18 +96,13 @@ def run_status(run):
 
 
 # ── device panel ──────────────────────────────────────────────────────────
-def device_panel(run, page=0, per_page=8):
-    """Per-device pause/resume panel. Buttons carry the device INDEX in
-    run.devices, which is stable for the life of the run."""
+def device_panel(run):
+    """Per-device pause/resume panel. All devices in one list, no pagination."""
     devices = run.devices
     stopped = run.stopped_set()
     paused = run.paused_set()
     kicked = run.kicked_set()
     total = len(devices)
-    pages = max(1, math.ceil(total / per_page))
-    page = max(0, min(page, pages - 1))
-    start = page * per_page
-    chunk = list(enumerate(devices))[start:start + per_page]
 
     n_run = total - len(stopped) - len(paused)
     lines = [
@@ -117,7 +112,7 @@ def device_panel(run, page=0, per_page=8):
         f"⏹ hapus <b>{len(stopped)}</b> · total <b>{total}</b>\n"
         f"<code>{BAR}</code>"
     ]
-    for i, did in chunk:
+    for i, did in enumerate(devices):
         if did in stopped:
             mark = "⏹"
         elif did in paused:
@@ -137,7 +132,7 @@ def device_panel(run, page=0, per_page=8):
     lines.append("<b>Klik tombol device → pause/lanjut.</b>")
 
     rows = []
-    for i, did in chunk:
+    for i, did in enumerate(devices):
         if did in stopped:
             mark = "⏹"
         elif did in paused:
@@ -153,20 +148,9 @@ def device_panel(run, page=0, per_page=8):
         name_str = name if name else ("belum dicek" if did not in kicked else "?")
         label = f"{mark} {i + 1}. {acct_str} · {name_str[:14]}"
         rows.append([{"text": label, "callback_data": f"tog:{run.run_id}:{i}"}])
-    if pages > 1:
-        rows.append([
-            {"text": "« Prev", "callback_data": f"dev:{run.run_id}:{page-1}"},
-            {"text": f"{page+1}/{pages}", "callback_data": "noop"},
-            {"text": "Next »", "callback_data": f"dev:{run.run_id}:{page+1}"},
-        ])
     rows.append([{"text": "📊 Status", "callback_data": f"st:{run.run_id}"},
                  {"text": "🏠 Menu", "callback_data": "menu"}])
     return "\n".join(lines), rows
-
-
-def page_of_device(run, index, per_page=8):
-    """Which panel page holds this device index."""
-    return index // per_page
 
 
 # ── device list view ──────────────────────────────────────────────────────
