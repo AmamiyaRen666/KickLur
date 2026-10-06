@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+uploads/
+*.log
+kicklur_store/
+.idea/
+.vscode/
+.DS_Store
