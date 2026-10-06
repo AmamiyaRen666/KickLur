@@ -51,10 +51,10 @@ class KickLurBot:
         text, kb = ui.main_menu(n, active)
         if message_id:
             r = self.tg.edit(chat_id, message_id, text, kb, parse_mode="HTML")
-            if r.get("ok"):
+            if r and r.get("ok"):
                 return message_id
         r = self.tg.send(chat_id, text, kb, parse_mode="HTML")
-        if r.get("ok"):
+        if r and r.get("ok"):
             return r["result"]["message_id"]
         return None
 
