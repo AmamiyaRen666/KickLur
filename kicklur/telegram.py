@@ -1,169 +1,134 @@
-"""Telegram client: long poll + paced sends, with 429 handling.
+"""Minimal Telegram client: pacing, flood handling, long polling.
 
-Deliberately minimal — no framework, so the Railway image stays small and the
-bot has no hidden scheduler.
-
-Two pacers, because one is not enough:
-
-  * a global one (TG_MIN_INTERVAL) that keeps total calls sane;
-  * a PER-CHAT one (TG_CHAT_MIN_INTERVAL) that keeps any single chat from
-    being hammered. Telegram limits per chat (~1 message/second sustained,
-    ~20/minute in practice), and several runs in one chat share that budget,
-    so the per-chat pacer is what actually prevents a 429.
-
-A 429 (retry_after) sets flood_until, and every later call waits it out
-instead of retrying into the wall.
+Only outgoing calls are paced. The long poll is a single blocked request, so
+gating it would only add latency.
 """
-import json
+import html
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
+from pathlib import Path
+
+import requests
 
 from . import config as cfg
-
-API = "https://api.telegram.org"
 
 
 class Telegram:
     def __init__(self, token):
         self.token = token
-        self._url = f"{API}/bot{token}"
+        self.base = f"https://api.telegram.org/bot{token}"
+        self.session = requests.Session()
         self._lock = threading.Lock()
-        self._last_send = 0.0
-        self._chat_last = {}          # chat_id -> last call time
-        self._offset = None
-        self.flood_until = 0.0
+        self._last = 0.0
+        self._flood_until = 0.0
 
-    # ── low level ──────────────────────────────────────────────────────────
-    def _call(self, method, params=None, files=None, timeout=30):
-        params = params or {}
-        if files:
-            body, ctype = self._multipart(params, files)
-            req = urllib.request.Request(
-                f"{self._url}/{method}", data=body,
-                headers={"Content-Type": ctype}, method="POST")
-        else:
-            req = urllib.request.Request(
-                f"{self._url}/{method}",
-                data=urllib.parse.urlencode(params).encode(), method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            try:
-                payload = json.loads(e.read().decode())
-            except Exception:
-                payload = {"ok": False, "description": f"HTTP {e.code}"}
-            if e.code == 429:
-                wait = (payload.get("parameters") or {}).get("retry_after", 5)
-                self.flood_until = time.time() + float(wait)
-            return payload
-        except Exception as e:
-            return {"ok": False, "description": f"{type(e).__name__}: {e}"}
-
-    @staticmethod
-    def _multipart(params, files):
-        boundary = "----KickLurBoundary7f3a"
-        parts = []
-        for k, v in params.items():
-            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
-                         f'name="{k}"\r\n\r\n{v}\r\n'.encode())
-        for k, (name, data) in files.items():
-            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
-                         f'name="{k}"; filename="{name}"\r\n'
-                         f"Content-Type: application/octet-stream\r\n\r\n".encode())
-            parts.append(data + b"\r\n")
-        parts.append(f"--{boundary}--\r\n".encode())
-        return b"".join(parts), f"multipart/form-data; boundary={boundary}"
-
-    def _pace(self, chat_id=None):
-        """Wait for the global and per-chat budgets, then stamp both."""
+    # ── pacing ─────────────────────────────────────────────────────────────
+    def flood_wait_left(self):
         with self._lock:
-            now = time.time()
-            if now < self.flood_until:
-                time.sleep(self.flood_until - now)
+            return max(0.0, self._flood_until - time.time())
+
+    def _gate(self):
+        while True:
+            with self._lock:
                 now = time.time()
-            gap = now - self._last_send
-            if gap < cfg.TG_MIN_INTERVAL:
-                time.sleep(cfg.TG_MIN_INTERVAL - gap)
-            if chat_id is not None:
-                last = self._chat_last.get(chat_id, 0.0)
-                gap_c = time.time() - last
-                if gap_c < cfg.TG_CHAT_MIN_INTERVAL:
-                    time.sleep(cfg.TG_CHAT_MIN_INTERVAL - gap_c)
-                self._chat_last[chat_id] = time.time()
-            self._last_send = time.time()
+                if now < self._flood_until:
+                    wait = self._flood_until - now
+                elif now - self._last < cfg.TG_MIN_INTERVAL:
+                    wait = cfg.TG_MIN_INTERVAL - (now - self._last)
+                else:
+                    self._last = now
+                    return
+            time.sleep(min(wait, 5.0))
 
-    # ── api ────────────────────────────────────────────────────────────────
-    def me(self):
-        return self._call("getMe")
-
-    def send(self, chat_id, text, keyboard=None, parse_mode=None):
-        self._pace(chat_id)
-        p = {"chat_id": chat_id, "text": text[:4096],
-             "disable_web_page_preview": "true"}
-        if parse_mode:
-            p["parse_mode"] = parse_mode
-        if keyboard is not None:
-            p["reply_markup"] = json.dumps(keyboard)
-        return self._call("sendMessage", p)
-
-    def edit(self, chat_id, message_id, text, keyboard=None, parse_mode=None):
-        self._pace(chat_id)
-        p = {"chat_id": chat_id, "message_id": message_id, "text": text[:4096],
-             "disable_web_page_preview": "true"}
-        if parse_mode:
-            p["parse_mode"] = parse_mode
-        if keyboard is not None:
-            p["reply_markup"] = json.dumps(keyboard)
-        r = self._call("editMessageText", p)
-        if not r.get("ok") and "not modified" in str(r.get("description", "")):
-            return {"ok": True, "unchanged": True}
-        return r
-
-    def answer_callback(self, callback_id, text=""):
-        # A callback answer is not a chat message, so it is not subject to the
-        # per-chat message limit — but it still must not be unbounded. The
-        # global pacer applies; the per-chat one does not.
-        self._pace(None)
-        return self._call("answerCallbackQuery",
-                          {"callback_query_id": callback_id, "text": text[:200]})
-
-    def send_document(self, chat_id, filename, data, caption=""):
-        self._pace(chat_id)
-        p = {"chat_id": chat_id}
-        if caption:
-            p["caption"] = caption[:1000]
-        return self._call("sendDocument", p, files={"document": (filename, data)})
-
-    def get_file(self, file_id):
-        r = self._call("getFile", {"file_id": file_id})
-        if not r.get("ok"):
-            return None
-        path = r["result"].get("file_path")
-        if not path:
-            return None
-        url = f"{API}/file/bot{self.token}/{path}"
+    def api(self, method, **payload):
+        """POST one API call. Returns the decoded body, or {'ok': False}."""
+        if self.flood_wait_left() > 0:
+            return {"ok": False, "flooded": True,
+                    "retry_after": self.flood_wait_left()}
+        self._gate()
         try:
-            with urllib.request.urlopen(url, timeout=60) as fh:
-                return fh.read()
+            r = self.session.post(f"{self.base}/{method}", json=payload, timeout=25)
+            data = r.json()
+        except Exception:
+            return {"ok": False}
+        if r.status_code == 429:
+            retry_after = (data.get("parameters") or {}).get("retry_after", 5)
+            with self._lock:
+                # Honour the full penalty: capping it just produces more 429s.
+                self._flood_until = time.time() + retry_after
+            return {"ok": False, "flooded": True, "retry_after": retry_after}
+        return data
+
+    # ── convenience wrappers ───────────────────────────────────────────────
+    def send(self, chat_id, text, keyboard=None):
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if keyboard is not None:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        r = self.api("sendMessage", **payload)
+        if r.get("ok"):
+            return r["result"]["message_id"]
+        return None
+
+    def edit(self, chat_id, message_id, text, keyboard=None):
+        payload = {"chat_id": chat_id, "message_id": message_id,
+                   "text": text, "parse_mode": "HTML"}
+        if keyboard is not None:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        elif keyboard is None:
+            payload["reply_markup"] = {"inline_keyboard": []}
+        r = self.api("editMessageText", **payload)
+        return r.get("ok", False)
+
+    def answer(self, callback_id, text="", alert=False):
+        if callback_id is None:
+            return False
+        return self.api("answerCallbackQuery", callback_query_id=callback_id,
+                        text=text, show_alert=alert).get("ok", False)
+
+    def send_document(self, chat_id, filepath, caption=""):
+        path = Path(filepath)
+        if not path.exists():
+            return False
+        if path.stat().st_size / (1024 * 1024) > cfg.TG_MAX_DOC_MB:
+            self.send(chat_id, f"⚠️ File terlalu besar: <code>{html.escape(path.name)}</code>")
+            return False
+        self._gate()
+        try:
+            with open(path, "rb") as fh:
+                r = self.session.post(f"{self.base}/sendDocument",
+                                      files={"document": fh},
+                                      data={"chat_id": chat_id,
+                                            "caption": caption[:1024]},
+                                      timeout=120)
+            return r.json().get("ok", False)
+        except Exception:
+            return False
+
+    def download(self, file_id, dest_dir):
+        info = self.api("getFile", file_id=file_id)
+        if not info.get("ok"):
+            return None
+        try:
+            remote = info["result"]["file_path"]
+            url = f"https://api.telegram.org/file/bot{self.token}/{remote}"
+            r = self.session.get(url, timeout=180)
+            if r.status_code != 200:
+                return None
+            dest = Path(dest_dir) / f"up_{int(time.time())}_{Path(remote).name}"
+            dest.write_bytes(r.content)
+            return str(dest)
         except Exception:
             return None
 
     # ── polling ────────────────────────────────────────────────────────────
-    def poll(self, timeout=25):
-        p = {"timeout": timeout}
-        if self._offset is not None:
-            p["offset"] = self._offset
-        r = self._call("getUpdates", p, timeout=timeout + 10)
-        if not r.get("ok"):
-            time.sleep(2)
-            return []
-        out = []
-        for upd in r.get("result", []):
-            self._offset = upd["update_id"] + 1
-            out.append(upd)
-        return out
+    def get_updates(self, offset, timeout=25):
+        try:
+            r = self.session.get(f"{self.base}/getUpdates",
+                                 params={"offset": offset, "timeout": timeout},
+                                 timeout=timeout + 15)
+            return r.json()
+        except Exception:
+            return {"ok": False}
 
+    def me(self):
+        return self.api("getMe")

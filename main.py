@@ -12,7 +12,7 @@ import threading
 import time
 
 from kicklur import config as cfg
-from kicklur.bot import KickLurBot
+from kicklur.bot import SumireBot
 from kicklur.telegram import Telegram
 
 
@@ -52,8 +52,13 @@ def main():
     print(f"  max global   : {cfg.BF_MAX_CONCURRENCY}")
     print(f"  device cap   : {cfg.BF_MAX_DEVICES}")
     print(f"  kick delay   : {cfg.BF_KICK_DELAY}s")
-    print(f"  login server : {cfg.HOST}:{cfg.PORT}")
-    print(f"  cli version  : {cfg.VER}")
+    print(f"  login server : {cfg.KICK_HOST}:{cfg.KICK_PORT}")
+    print(f"  cli version  : {cfg.KICK_CLI_VERSION}")
+    print(f"  channel      : {cfg.KICK_CHANNEL}")
+    print(f"  lookup       : {cfg.BF_LOOKUP}")
+    print(f"  ack wait     : {cfg.BF_ACK_WAIT}s")
+    print(f"  fan-out      : {cfg.BF_KICK_ALL_SERVERS}")
+    print(f"  kick twice   : {cfg.BF_KICK_TWICE}")
     print("=" * 58)
 
     tg = Telegram(cfg.BOT_TOKEN)
@@ -63,13 +68,13 @@ def main():
         sys.exit(1)
     print(f"[KICKLUR] bot @{me['result'].get('username')}", flush=True)
 
-    if cfg.PORT_HTTP:
+    if cfg.PORT:
         try:
-            _start_health_server(cfg.PORT_HTTP)
+            _start_health_server(cfg.PORT)
         except Exception as e:
             print(f"[KICKLUR] health endpoint skipped: {e}", flush=True)
 
-    bot = KickLurBot(tg)
+    bot = SumireBot(tg)
 
     def _stop(signum, frame):
         print(f"\n[KICKLUR] signal {signum}, keluar...", flush=True)

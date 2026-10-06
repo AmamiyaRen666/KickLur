@@ -1,12 +1,8 @@
-"""SDP wire format + TCP connection — ported from brutetolslhoya.
+"""SDP wire format + TCP connection.
 
-The packing rules (tag-15 sentinel, zstd frame header, AES for ctype 2/3/18)
-are the on-the-wire protocol the MLBB servers speak, so they must stay
-byte-for-byte identical to the source.
-
-Differences from the source are limited to safety: a size sanity check on the
-frame header and a socket.error guard so a dead peer returns (None, None)
-instead of propagating.
+Copied verbatim from the working implementation. This is the on-the-wire
+protocol the game servers speak, so the packing rules (including the tag-15
+sentinel and the zstd frame header) must stay byte-for-byte identical.
 """
 import socket
 import struct
@@ -32,10 +28,6 @@ class SdpType(Enum):
     STRUCT_END = 8
 
 
-class SdpError(Exception):
-    pass
-
-
 class SdpStruct(dict):
     __slots__ = ("data", "offset")
 
@@ -50,12 +42,22 @@ class SdpStruct(dict):
             self.update(data)
             self._pack()
 
-    # ── packing ────────────────────────────────────────────────────────────
     def _pack(self):
         self.data = bytes([SdpType.STRUCT_BEGIN.value << 4])
         for k, v in sorted(self.items()):
             self._pack_one(k, v)
         self.data += bytes([SdpType.STRUCT_END.value << 4])
+
+    def _unpack(self):
+        if not self.data:
+            return
+        if self.data[0] >> 4 == SdpType.STRUCT_BEGIN.value:
+            self.offset = 1
+        while self.offset < len(self.data):
+            k, v = self._unpack_one()
+            if isinstance(v, SdpType) and v == SdpType.STRUCT_END:
+                break
+            self[k] = v
 
     def _w_num(self, n):
         r = bytearray()
@@ -66,17 +68,31 @@ class SdpStruct(dict):
         return bytes(r)
 
     def _hdr(self, tag, dtype):
-        """Type/tag header.
+        """Write a type/tag header.
 
-        Tags 0-14 fit the low nibble; tag 15+ is a sentinel (low nibble 0x0F)
-        followed by the real tag as a varint. Without this the tag is OR-ed
-        into the nibble, so tag 15 — the device id in the kick packet — is
-        silently dropped and the server never reads it.
+        Tags 0-14 fit in the low nibble. Tag 15+ is a sentinel: the low nibble
+        becomes 0x0F and the real tag follows as a varint. Without this the tag
+        is silently OR-ed into the nibble, so tag 15 (the device id in the
+        session-kick packet) is dropped and the server never reads it.
         """
         if tag < 15:
             self.data += bytes([(dtype.value << 4) | tag])
         else:
             self.data += bytes([(dtype.value << 4) | 15]) + self._w_num(tag)
+
+    def _r_num(self):
+        n = 1
+        v = self.data[self.offset] & 0x7F
+        while (self.offset + n - 1 < len(self.data)
+               and self.data[self.offset + n - 1] >= 0x80):
+            if self.offset + n >= len(self.data):
+                break
+            v |= (self.data[self.offset + n] & 0x7F) << (7 * n)
+            n += 1
+            if n > 5:
+                break  # prevent overflow
+        self.offset += n
+        return v
 
     def _pack_one(self, tag, val):
         if val is None:
@@ -108,39 +124,13 @@ class SdpStruct(dict):
                 self.data += bytes([(SdpType.STRUCT_BEGIN.value << 4) | tag])
                 for k, v in sorted(val.items()):
                     self._pack_one(k, v)
-                self.data += bytes([SdpType.STRUCT_END.value << 4])
+                self.data += bytes([(SdpType.STRUCT_END.value << 4)])
             else:
                 self._hdr(tag, SdpType.DICT)
                 self.data += self._w_num(len(val))
                 for k, v in sorted(val.items()):
                     self._pack_one(0, k)
                     self._pack_one(0, v)
-
-    # ── unpacking ──────────────────────────────────────────────────────────
-    def _unpack(self):
-        if not self.data:
-            return
-        if self.data[0] >> 4 == SdpType.STRUCT_BEGIN.value:
-            self.offset = 1
-        while self.offset < len(self.data):
-            k, v = self._unpack_one()
-            if isinstance(v, SdpType) and v == SdpType.STRUCT_END:
-                break
-            self[k] = v
-
-    def _r_num(self):
-        n = 1
-        v = self.data[self.offset] & 0x7F
-        while (self.offset + n - 1 < len(self.data)
-               and self.data[self.offset + n - 1] >= 0x80):
-            if self.offset + n >= len(self.data):
-                break
-            v |= (self.data[self.offset + n] & 0x7F) << (7 * n)
-            n += 1
-            if n > 5:
-                break
-        self.offset += n
-        return v
 
     def _unpack_one(self):
         try:
@@ -200,12 +190,7 @@ class SdpStruct(dict):
         return 0, None
 
 
-class Conn:
-    """Blocking TCP connection speaking SDP.
-
-    open() timeout is 5s, matching brutetolslhoya's Conn.open.
-    """
-
+class BaseConn:
     __slots__ = ("host", "port", "sequence", "socket", "_rxbuf")
 
     def __init__(self, host, port):
@@ -219,44 +204,47 @@ class Conn:
         return self
 
     def __exit__(self, *a):
-        self.close()
+        self.cleanup()
         return False
 
-    def open(self, timeout=5):
+    def connect(self, host=None, port=None, timeout=6):
+        if host:
+            self.host = host
+        if port:
+            self.port = port
         self.sequence = 1
+        # A reused connection must not carry leftover bytes of the previous
+        # session into the first frame of the new one.
         self._rxbuf = b""
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.settimeout(timeout)
-        try:
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except Exception:
-            pass
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.socket.connect((self.host, self.port))
         self.socket.settimeout(timeout)
 
-    def close(self):
+    def cleanup(self):
         self._rxbuf = b""
         if self.socket:
             try:
                 self.socket.close()
             except Exception:
                 pass
+            self.sequence = 1
             self.socket = None
-        self.sequence = 1
 
-    def send(self, pkt_id, sdp):
+    def send_data(self, pkt_id, sdp):
         pkt = SdpStruct({0: pkt_id, 1: self.sequence, 5: sdp.data}).data
         buf = zstd.compress(pkt)
         flags = (len(buf) + 4) | (16 << 24)
-        self.socket.send(flags.to_bytes(4, "big") + buf)
+        self.socket.sendall(flags.to_bytes(4, "big") + buf)
         self.sequence += 1
 
-    def recv(self):
-        """Read one SDP frame. Returns (packet_id, SdpStruct|None).
-
-        (-1, None) on timeout, (None, None) on a dead socket.
-        """
+    def recv_data(self):
+        # The TCP stream can carry several SDP frames in one segment, so keep
+        # the remainder buffered instead of discarding it.
         try:
+            if getattr(self, "_rxbuf", None) is None:
+                self._rxbuf = b""
             q = self._rxbuf
             self._rxbuf = b""
             while len(q) < 4:
@@ -293,7 +281,7 @@ class Conn:
             if pid is None:
                 return None, None
             body = res.get(6) or res.get(5)
-            return pid, (SdpStruct(body) if body and isinstance(body, bytes) else None)
+            return pid, SdpStruct(body) if body and isinstance(body, bytes) else None
         except socket.timeout:
             return -1, None
         except socket.error:
