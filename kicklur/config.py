@@ -120,6 +120,11 @@ BF_KICK_TWICE = (os.environ.get("BF_KICK_TWICE", "0").strip().lower()
 MLBB_GS_SEED = [a.strip() for a in
                 os.environ.get("MLBB_GS_SEED", "").split(",") if a.strip()]
 
+# ── KickLur-specific (kept from the original KickLur config) ────────────────
+ALLOWED_IDS = [x.strip() for x in
+               os.environ.get("TG_ALLOWED_IDS", "").split(",") if x.strip()]
+PANEL_REFRESH_SEC = _float("PANEL_REFRESH_SEC", 5.0)
+
 # ── Telegram pacing ─────────────────────────────────────────────────────────
 # Outgoing calls only; the long poll is never gated. A run rewrites its message
 # on demand and once at the end, so this is a safety net, not the main limiter.

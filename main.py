@@ -12,7 +12,7 @@ import threading
 import time
 
 from kicklur import config as cfg
-from kicklur.bot import SumireBot
+from kicklur.bot import KickLurBot
 from kicklur.telegram import Telegram
 
 
@@ -74,7 +74,7 @@ def main():
         except Exception as e:
             print(f"[KICKLUR] health endpoint skipped: {e}", flush=True)
 
-    bot = SumireBot(tg)
+    bot = KickLurBot(tg)
 
     def _stop(signum, frame):
         print(f"\n[KICKLUR] signal {signum}, keluar...", flush=True)
@@ -88,7 +88,7 @@ def main():
 
     while True:
         try:
-            bot.poll()
+            bot.poll_forever()
         except KeyboardInterrupt:
             break
         except Exception as e:

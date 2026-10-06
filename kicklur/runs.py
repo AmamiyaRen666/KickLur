@@ -1,500 +1,331 @@
-"""Independent, concurrently running kick jobs.
+"""Run registry + worker pool.
 
-Runs live in their own registry instead of sharing one job slot, so starting a
-new run never stops the one already in flight, and stopping one run leaves every
-other run alone.
+One run per user. Each run owns:
+  - a worker pool (BF_WORKERS threads) so a slow device never idles the rest
+  - per-device pause/resume and a permanent stop marker
+  - a global concurrency budget shared across all runs (BF_MAX_CONCURRENCY)
+
+Pause is authoritative. A device carries an `in_flight` flag that is claimed
+and released under the run lock, so:
+
+  * two workers can never kick the same device at the same time
+  * once a device is PAUSED, no new kick starts on it — including from workers
+    that had already picked it and were waiting for a free slot
+
+A kick already on the wire finishes on its own; a socket call cannot be
+aborted. The panel says so instead of pretending otherwise.
+
+"Loop" matches the source: 1 loop = 1 kick, devices rotate.
 """
-import collections
-import math
 import threading
 import time
+from dataclasses import dataclass, field
 
 from . import config as cfg
+from .engine import cached_name
 from .kicker import kick_once
 
-# Bounds the total number of in-flight kicks across ALL runs, with a per-run
-# quota so no run can starve another.
-#
-# A plain shared semaphore was not enough: the oldest run's workers released a
-# slot and grabbed it straight back, so a newer run never won one and sat at
-# "Kick: 0" forever (reproduced: run #1 at 18 kicks, run #2 at 0).
-# Run status constants (used by ui.py)
 RUNNING = "running"
 PAUSED = "paused"
-DONE = "done"
 STOPPED = "stopped"
-
-_ACTIVE_RUNS = [0]
-_ACTIVE_RUNS_LOCK = threading.Lock()
+DONE = "done"
 
 
-def _register_run(delta):
-    with _ACTIVE_RUNS_LOCK:
-        _ACTIVE_RUNS[0] = max(0, _ACTIVE_RUNS[0] + delta)
-        return _ACTIVE_RUNS[0]
+@dataclass
+class DeviceState:
+    device_id: str
+    kicks: int = 0
+    ok: int = 0
+    fail: int = 0
+    last_ms: float = 0.0
+    last_desc: str = ""
+    nick: str = ""
+    acc: object = None
+    state: str = RUNNING          # running | paused | stopped
+    ever_ok: bool = False
+    in_flight: bool = False       # guarded by Run.lock
 
-
-def _active_run_count():
-    with _ACTIVE_RUNS_LOCK:
-        return max(1, _ACTIVE_RUNS[0])
-
-
-def _quota_for(workers_cap):
-    """Slots one run may hold right now (>= 1, so it always makes progress)."""
-    return max(1, min(workers_cap, cfg.BF_MAX_CONCURRENCY // _active_run_count()))
-
-
-class SlotPool:
-    """Global kick-slot pool with a live per-run quota.
-
-    A run may only hold up to its quota, recomputed against the number of live
-    runs. Quotas shrink as runs are added, so an old run drains its excess on
-    the next release and the new run gets its turn.
-    """
-
-    def __init__(self, capacity):
-        self.capacity = max(1, capacity)
-        self.cond = threading.Condition()
-        self.used = 0
-        self.per_run = {}
-
-    def acquire(self, run_key, workers_cap, timeout=30.0):
-        deadline = time.time() + timeout
-        with self.cond:
-            while True:
-                quota = _quota_for(workers_cap)
-                held = self.per_run.get(run_key, 0)
-                if self.used < self.capacity and held < quota:
-                    self.used += 1
-                    self.per_run[run_key] = held + 1
-                    return True
-                if time.time() > deadline:
-                    return False
-                self.cond.wait(0.2)
-
-    def release(self, run_key):
-        with self.cond:
-            held = self.per_run.get(run_key, 0)
-            if held > 0:
-                self.per_run[run_key] = held - 1
-                self.used = max(0, self.used - 1)
-            self.cond.notify_all()
-
-    def drop_run(self, run_key):
-        """Forget a finished run's bookkeeping and wake any waiters."""
-        with self.cond:
-            self.per_run.pop(run_key, None)
-            self.cond.notify_all()
-
-
-_SLOTS = SlotPool(cfg.BF_MAX_CONCURRENCY)
-
-# Sentinel from the claim step: nothing is kickable *right now*, but the run is
-# still alive (every remaining device is paused). Waiting is correct; ending
-# the run would throw away a pause that the user means to resume.
-_WAIT = object()
-
-
-class Run:
-    def __init__(self, run_id, chat_id, devices):
-        self.run_id = run_id
-        self.chat_id = str(chat_id)
-        self.devices = list(devices)
-        self.stopped_devices = set()
-        self.paused_devices = set()
-        self.stop = False
-        self.finished = False
-        self.start = time.time()
-        self.lock = threading.Lock()
-        self.kicks = 0
-        self.ok = 0
-        self.fail = 0
-        self.passes = 0
-        self.current = ""
-        self.last_err = ""
-        self.note = ""
-        self.loops = 0          # 0 means unlimited
-        self.message_id = None
-        # device -> {"ok", "acct", "name"} plus the order devices were touched,
-        # so the status message can list account ids and nicknames.
-        self.results = {}
-        self.recent = collections.deque(maxlen=15)
-
-    # ── liveness ───────────────────────────────────────────────────────────
     @property
-    def alive(self):
-        return not self.stop and not self.finished
+    def mark(self):
+        if self.state == STOPPED:
+            return "⏹"
+        if self.state == PAUSED:
+            return "⏸"
+        if self.ever_ok:
+            return "✅"
+        return "🟢"
 
-    def request_stop(self):
-        with self.lock:
-            self.stop = True
 
-    def stop_device(self, device):
-        """Permanent: the device never runs again in this run."""
-        with self.lock:
-            self.stopped_devices.add(device)
-            self.paused_devices.discard(device)
+@dataclass
+class Run:
+    run_id: int
+    chat_id: int
+    message_id: int
+    total_loops: int              # 0 = unlimited
+    delay_sec: float
+    devices: dict = field(default_factory=dict)   # device_id -> DeviceState
+    order: list = field(default_factory=list)
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    status: str = RUNNING
+    started: float = field(default_factory=time.time)
+    finished: float = 0.0
+    kicks: int = 0
+    ok: int = 0
+    fail: int = 0
+    latencies: list = field(default_factory=list)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    workers_alive: int = 0
+    # What the run's message currently shows. The background updater only
+    # touches the message while it is still showing "status"; once the user
+    # opens the device panel the updater leaves it alone, so a message never
+    # changes under the user's hands.
+    view: str = "status"
+    edit_lock: threading.Lock = field(default_factory=threading.Lock)
+    last_panel_text: str = ""
 
-    def pause_device(self, device):
-        """Temporary: skipped while paused, runs again after resume."""
-        with self.lock:
-            if device in self.stopped_devices:
-                return False
-            self.paused_devices.add(device)
-            return True
+    @property
+    def elapsed(self):
+        return (self.finished or time.time()) - self.started
 
-    def resume_device(self, device):
-        with self.lock:
-            self.paused_devices.discard(device)
-            return True
+    @property
+    def speed(self):
+        el = self.elapsed
+        return self.kicks / el if el > 0 else 0.0
 
-    def is_stopped(self, device):
-        with self.lock:
-            return device in self.stopped_devices
+    @property
+    def avg_ms(self):
+        return (sum(self.latencies) / len(self.latencies)) if self.latencies else 0.0
 
-    def is_paused(self, device):
-        with self.lock:
-            return device in self.paused_devices
+    def live_devices(self):
+        """Devices that are not permanently stopped."""
+        return [d for d in self.devices.values() if d.state != STOPPED]
 
-    def toggle_pause(self, device):
-        """Pause a running device, or resume a paused one. Returns the new state."""
-        with self.lock:
-            if device in self.stopped_devices:
-                return "stopped"
-            if device in self.paused_devices:
-                self.paused_devices.discard(device)
-                return "running"
-            self.paused_devices.add(device)
-            return "paused"
+    def running_devices(self):
+        return [d for d in self.devices.values() if d.state == RUNNING]
 
-    def pending(self):
-        """Devices that can still be kicked right now."""
-        with self.lock:
-            return [d for d in self.devices
-                    if d not in self.stopped_devices
-                    and d not in self.paused_devices]
+    def paused_devices(self):
+        return [d for d in self.devices.values() if d.state == PAUSED]
 
-    # `runnable` is the name the executor uses; kept separate from `pending`
-    # only for readability at the call sites.
-    runnable = pending
+    @property
+    def all_paused(self):
+        live = self.live_devices()
+        return bool(live) and not any(d.state == RUNNING for d in live)
 
-    def stopped_set(self):
-        with self.lock:
-            return set(self.stopped_devices)
-
-    def paused_set(self):
-        with self.lock:
-            return set(self.paused_devices)
-
-    def has_paused(self):
-        with self.lock:
-            return bool(self.paused_devices)
-
-    def active_count(self):
-        return len(self.pending())
-
-    def kicked_set(self):
-        with self.lock:
-            return set(self.results.keys())
-
-    def set_passes(self, n):
-        with self.lock:
-            self.passes = n
-
-    # ── accounting ─────────────────────────────────────────────────────────
-    def record(self, device, ok, msg, profile=None):
-        with self.lock:
-            self.kicks += 1
-            self.current = device
-            info = self.results.get(device) or {}
-            info["ok"] = ok
-            if profile:
-                acct = profile.get("account_id")
-                if acct is not None:
-                    info["acct"] = acct
-                if profile.get("name"):
-                    info["name"] = profile["name"]
-            self.results[device] = info
-            try:
-                self.recent.remove(device)
-            except ValueError:
-                pass
-            self.recent.append(device)
-            if ok:
-                self.ok += 1
-            else:
-                self.fail += 1
-                if not self.last_err:
-                    self.last_err = msg
-
-    def snapshot(self):
-        with self.lock:
-            return {
-                "run_id": self.run_id,
-                "devices": len(self.devices),
-                "active": len([d for d in self.devices
-                               if d not in self.stopped_devices
-                               and d not in self.paused_devices]),
-                "stopped": len(self.stopped_devices),
-                "paused": len(self.paused_devices),
-                "kicks": self.kicks,
-                "ok": self.ok,
-                "fail": self.fail,
-                "passes": self.passes,
-                "current": self.current,
-                "last_err": self.last_err,
-                "note": self.note,
-                "loops": self.loops,
-                "start": self.start,
-                "elapsed": time.time() - self.start,
-                "results": [(d, dict(self.results.get(d) or {}))
-                            for d in reversed(self.recent)],
-            }
+    def progress(self):
+        """(done, total) for the progress line."""
+        return self.kicks, (self.total_loops or 0)
 
 
 class RunRegistry:
     def __init__(self):
-        self._lock = threading.Lock()
-        self._seq = 0
         self._runs = {}
+        self._next_id = 1
+        self._lock = threading.Lock()
+        self._slots = threading.Semaphore(cfg.BF_MAX_CONCURRENCY)
 
-    def create(self, chat_id, devices):
+    # ── lifecycle ──────────────────────────────────────────────────────────
+    def create(self, chat_id, message_id, device_ids, total_loops, delay_sec):
         with self._lock:
-            self._seq += 1
-            run = Run(self._seq, chat_id, devices)
-            self._runs[(str(chat_id), self._seq)] = run
+            run_id = self._next_id
+            self._next_id += 1
+            run = Run(run_id=run_id, chat_id=chat_id, message_id=message_id,
+                      total_loops=total_loops, delay_sec=delay_sec)
+            for did in device_ids:
+                d = DeviceState(device_id=did)
+                # Seed from the name cache so a device already resolved in an
+                # earlier run shows its name immediately, instead of "?" until
+                # the first kick lands.
+                c_acc, c_nick = cached_name(device_id=did)
+                if c_nick:
+                    d.nick = c_nick
+                    if c_acc:
+                        d.acc = c_acc
+                run.devices[did] = d
+                run.order.append(did)
+            self._runs[run_id] = run
             return run
 
-    def get(self, chat_id, run_id):
-        try:
-            run_id = int(run_id)
-        except (TypeError, ValueError):
-            return None
+    def get(self, run_id):
         with self._lock:
-            return self._runs.get((str(chat_id), run_id))
+            return self._runs.get(run_id)
 
-    def list(self, chat_id):
+    def all_runs(self):
         with self._lock:
-            runs = [r for k, r in self._runs.items() if k[0] == str(chat_id)]
-        return sorted(runs, key=lambda r: r.run_id)
+            return list(self._runs.values())
 
-    def active(self, chat_id):
-        return [r for r in self.list(chat_id) if r.alive]
+    def active_runs(self, chat_id=None):
+        return [r for r in self.all_runs()
+                if r.status in (RUNNING, PAUSED)
+                and (chat_id is None or r.chat_id == chat_id)]
 
-    def stop(self, chat_id, run_id):
-        run = self.get(chat_id, run_id)
+    def stop(self, run_id):
+        run = self.get(run_id)
         if not run:
             return False
-        run.request_stop()
+        run.stop_event.set()
+        with run.lock:
+            run.status = STOPPED
+            for d in run.devices.values():
+                d.state = STOPPED
         return True
 
-    def stop_all(self, chat_id):
+    def stop_all(self, chat_id=None):
         n = 0
-        for run in self.active(chat_id):
-            run.request_stop()
-            n += 1
+        for r in self.active_runs(chat_id):
+            if self.stop(r.run_id):
+                n += 1
         return n
 
-    def end(self, run):
-        with self._lock:
-            self._runs.pop((run.chat_id, run.run_id), None)
-        with run.lock:
-            run.finished = True
+    def toggle_device(self, run_id, device_id):
+        """Pause <-> resume one device. Returns the new state, or None.
 
-
-class RunExecutor(threading.Thread):
-    """Drives one Run with a continuous worker pool.
-
-    `loops` is a KICK budget (same meaning as the original implementation).
-    Workers pull the next kickable device the moment they free up — there is no
-    batch barrier, so one slow device (a 15s timeout) never parks the others,
-    and a device that is paused or stopped is skipped on the very next pull
-    instead of at the end of a batch.
-    """
-
-    def __init__(self, run, loops, registry, on_finish=None):
-        super().__init__(daemon=True)
-        # NOTE: the Run is stored as `job`, never as `self.run` — Thread defines
-        # run() as the entry point, and an attribute of that name shadows it
-        # with a non-callable, which makes the thread die on bootstrap.
-        self.job = run
-        self.loops = loops
-        self.registry = registry
-        self.on_finish = on_finish
-        self.job.loops = 0 if loops == math.inf else int(loops)
-        # Ceiling for this run. The live quota is decided per kick by the slot
-        # pool, against the number of runs that are alive right now.
-        self.workers_cap = max(1, min(cfg.BF_WORKERS, cfg.BF_MAX_CONCURRENCY))
-        self.workers = self.workers_cap
-        # Pause between kicks per worker. The original BF Kicker waited
-        # BF_KICK_DELAY (0.5s) after every kick plus a 0.01s login rate limit,
-        # and that pacing is what keeps the login/game server from treating the
-        # device as a bot. Sending with no gap produced "Login server rejected
-        # the device id" and "GAME SERVER REFUSED".
-        self.kick_delay = cfg.BF_KICK_DELAY
-        # Shared pull state. The lock guards cursor + claimed so two workers can
-        # never take the same device or overshoot the budget. _in_flight tracks
-        # devices currently being kicked, so the same device is never handed to
-        # two workers at once.
-        self._claim_lock = threading.Lock()
-        self._cursor = 0
-        self._claimed = 0
-        self._in_flight = set()
-        # Per-device cooldown: device -> earliest time it may be kicked again.
-        # Reproduces the original's "one device, one kick per BF_KICK_DELAY"
-        # rhythm while still letting different devices run in parallel.
-        self._device_next = {}
-        self._wait_hint = 0.05
-        self._stop_event = threading.Event()
-
-    # ── work distribution ──────────────────────────────────────────────────
-    def _next_device(self):
-        """Claim the next kickable device.
-
-        Returns (device, None) when there is work, (None, _WAIT) when every
-        remaining device is paused — the caller should wait, not finish — and
-        (None, None) when the run is done.
-
-        A device is only handed out when NO worker is already kicking it. The
-        original BF Kicker walks the list with a single thread, so each device
-        is kicked once per round; without this guard a run of one device and 20
-        workers kicks that same device 20 times at once (measured: peak
-        concurrency 20, 16 kicks/s on one device). That is what makes a device
-        look like a bot and get the login server to start refusing.
+        Takes the run lock, so it cannot interleave with _claim: when this
+        returns, the device is either PAUSED (no new kick will start) or
+        RUNNING.
         """
-        with self._claim_lock:
-            if not self.job.alive:
-                return None, None
-            if self.loops != math.inf and self._claimed >= self.loops:
-                return None, None
-            n = len(self.job.devices)
-            if n == 0:
-                return None, None
-            cooling = False
-            for _ in range(n):
-                dev = self.job.devices[self._cursor]
-                self._cursor = (self._cursor + 1) % n
-                if self.job.is_stopped(dev) or self.job.is_paused(dev):
-                    continue
-                if dev in self._in_flight:
-                    # Another worker is already kicking this device. Skip it and
-                    # try the next one, so two workers never hit the same device.
-                    continue
-                if self._device_next.get(dev, 0.0) > time.time():
-                    # This device is still cooling down from its last kick.
-                    # Pacing is per DEVICE, which is what the original does with
-                    # its single thread: one device is contacted about once per
-                    # BF_KICK_DELAY. Different devices still run in parallel.
-                    cooling = True
-                    continue
-                self._claimed += 1
-                self._in_flight.add(dev)
-                # passes = how many times the whole list has been walked. Counting
-                # it at claim time (not only on wrap) keeps the last partial
-                # round included: 8 kicks over 4 devices is 2 passes, not 1.
-                self.job.set_passes(self._claimed // n)
-                return dev, None
-            # A full sweep found nothing kickable right now.
-            if self._in_flight or cooling:
-                # Work exists, it is just in flight or cooling down. Wait for it
-                # rather than kicking the same device again straight away. The
-                # hint is how long until the earliest device frees up, so the
-                # worker wakes exactly then instead of polling on a fixed timer
-                # (a 0.4s poll turned a 0.5s cooldown into ~0.8s per kick).
-                soonest = min([self._device_next.get(d, 0.0)
-                               for d in self.job.devices] or [0.0])
-                hint = soonest - time.time() if soonest > time.time() else 0.05
-                self._wait_hint = max(0.02, min(hint, 0.25))
-                return None, _WAIT
-            if self.job.has_paused():
-                self.job.note = "semua device di-pause"
-                return None, _WAIT
-            if self.job.stopped_set():
-                self.job.note = "semua device distop"
-            return None, None
-
-    def _release_device(self, device):
-        """Free a device once its kick finished, so a later round can take it."""
-        with self._claim_lock:
-            self._in_flight.discard(device)
-
-    def _refund(self):
-        """Give back a reserved budget slot for a claim that was never sent."""
-        with self._claim_lock:
-            if self._claimed > 0:
-                self._claimed -= 1
-
-    def _kick(self, device):
-        """Returns (ok, msg, profile), or None when the claim was skipped."""
-        got = _SLOTS.acquire(self.job.run_id, self.workers_cap)
-        if not got:
-            # Timed out waiting for a slot (pool busy). Skip; the budget is
-            # refunded by the caller so this never eats a kick.
+        run = self.get(run_id)
+        if not run:
             return None
-        try:
-            if not self.job.alive or self.job.is_stopped(device):
+        with run.lock:
+            d = run.devices.get(device_id)
+            if d is None:
                 return None
-            if self.job.is_paused(device):
-                # Paused between claim and send. Skipped, and the budget slot is
-                # returned by the caller so a pause never silently eats a kick.
-                return None
-            try:
-                ok, msg, profile = kick_once(device)
-            except Exception as e:
-                ok, msg, profile = False, f"❌ {type(e).__name__}: {e}", None
-            return ok, msg, profile
-        finally:
-            _SLOTS.release(self.job.run_id)
+            if d.state == STOPPED:
+                return d.state
+            d.state = PAUSED if d.state == RUNNING else RUNNING
+            return d.state
 
-    def _worker(self):
-        while True:
-            device, sentinel = self._next_device()
-            if device is None:
-                if sentinel is _WAIT:
-                    # Idle on purpose (everything paused, or all devices in
-                    # flight / cooling down). Wait the computed hint so a resume
-                    # is picked up quickly and a cooldown expires on time.
-                    if self._stop_event.wait(getattr(self, "_wait_hint", 0.05)):
-                        return
+    def set_all_paused(self, run_id, paused):
+        """Pause/resume every live device in one go. Returns how many changed."""
+        run = self.get(run_id)
+        if not run:
+            return 0
+        n = 0
+        with run.lock:
+            for d in run.devices.values():
+                if d.state == STOPPED:
                     continue
-                return
-            result = self._kick(device)
-            self._release_device(device)
-            if result is None:
-                self._refund()
-                continue
-            ok, msg, profile = result
-            self.job.record(device, ok, msg, profile)
-            # Start this DEVICE's cooldown. The original BF Kicker walks the list
-            # with a single thread and sleeps BF_KICK_DELAY between kicks, so one
-            # device is contacted about once per 0.5s. Pacing per device keeps
-            # that rhythm for each device while still letting different devices
-            # run in parallel - a per-worker sleep did not, because the kick
-            # itself (~790 ms) already outlasts the delay, and a global gate
-            # would have made extra workers useless.
-            if self.kick_delay > 0:
-                with self._claim_lock:
-                    self._device_next[device] = time.time() + self.kick_delay
+                want = PAUSED if paused else RUNNING
+                if d.state != want:
+                    d.state = want
+                    n += 1
+        return n
 
-    def run(self):  # noqa: D401 - Thread entry point
-        # Register before starting workers: the slot pool divides the global cap
-        # by the number of live runs, so this run must already be counted.
-        _register_run(+1)
+    def resume_all(self, run_id):
+        return self.set_all_paused(run_id, False)
+
+    # ── execution ──────────────────────────────────────────────────────────
+    def start(self, run, want_lookup=True):
+        run.status = RUNNING
+        n = min(cfg.BF_WORKERS, max(1, len(run.order)))
+        run.workers_alive = n
+        for i in range(n):
+            threading.Thread(target=self._worker, args=(run, i, want_lookup),
+                             name=f"kicklur-{run.run_id}-{i}", daemon=True).start()
+
+    def _claim(self, run, cursor):
+        """Atomically claim the next kickable device.
+
+        Kickable = RUNNING and not already in flight. Claiming happens under
+        the run lock, so the same device can never be handed to two workers.
+        """
+        with run.lock:
+            n = len(run.order)
+            if n == 0:
+                return None, None, cursor
+            for _ in range(n):
+                cursor = (cursor + 1) % n
+                did = run.order[cursor]
+                d = run.devices[did]
+                if d.state == RUNNING and not d.in_flight:
+                    d.in_flight = True
+                    return did, d, cursor
+        return None, None, cursor
+
+    def _worker(self, run, idx, want_lookup):
+        cursor = idx - 1
         try:
-            threads = []
-            for _ in range(self.workers):
-                t = threading.Thread(target=self._worker, daemon=True)
-                t.start()
-                threads.append(t)
-            for t in threads:
-                t.join()
-        finally:
-            self._stop_event.set()
-            _register_run(-1)
-            _SLOTS.drop_run(self.job.run_id)
-            self.registry.end(self.job)
-            if self.on_finish:
+            while not run.stop_event.is_set():
+                with run.lock:
+                    if run.total_loops and run.kicks >= run.total_loops:
+                        break
+
+                did, d, cursor = self._claim(run, cursor)
+                if did is None:
+                    # nothing kickable: either all devices are paused, or all
+                    # live ones are busy in other workers
+                    if not run.live_devices():
+                        break
+                    time.sleep(0.1)
+                    continue
+
                 try:
-                    self.on_finish(self.job)
-                except Exception:
-                    pass
+                    self._slots.acquire()
+                    try:
+                        if run.stop_event.is_set():
+                            break
+                        # Re-check under the lock. The user may have paused this
+                        # device, or another worker may have consumed the last
+                        # loop, while we were queued for a slot.
+                        with run.lock:
+                            if d.state != RUNNING:
+                                continue
+                            if run.total_loops and run.kicks >= run.total_loops:
+                                break
+                            # Reserve the loop BEFORE kicking, otherwise several
+                            # workers pass the budget test at once.
+                            run.kicks += 1
+
+                        ok, msg, profile = kick_once(did, want_name=want_lookup)
+
+                        with run.lock:
+                            d.kicks += 1
+                            if ok:
+                                run.ok += 1
+                                d.ok += 1
+                                d.ever_ok = True
+                            else:
+                                run.fail += 1
+                                d.fail += 1
+                            d.last_desc = msg
+                            ms = _parse_ms(msg)
+                            if ms is not None:
+                                d.last_ms = ms
+                                run.latencies.append(ms)
+                            if profile:
+                                d.nick = profile.get("nick") or d.nick
+                                d.acc = profile.get("acc") or d.acc
+                    finally:
+                        self._slots.release()
+                finally:
+                    with run.lock:
+                        d.in_flight = False
+
+                if run.delay_sec > 0 and not run.stop_event.is_set():
+                    slept = 0.0
+                    while slept < run.delay_sec and not run.stop_event.is_set():
+                        step = min(0.1, run.delay_sec - slept)
+                        time.sleep(step)
+                        slept += step
+        finally:
+            with run.lock:
+                run.workers_alive -= 1
+                last = run.workers_alive <= 0
+            if last:
+                run.finished = time.time()
+                if run.status != STOPPED:
+                    run.status = DONE
+
+
+def _parse_ms(msg):
+    """kick_once reports '… · 5ms · acc · nick'; pull the ms back out."""
+    try:
+        part = msg.split("·")[1].strip()
+        if part.endswith("ms"):
+            return float(part[:-2].strip())
+    except Exception:
+        pass
+    return None
+
+
+REGISTRY = RunRegistry()
