@@ -14,7 +14,7 @@ from . import ui
 from .devices import (DeviceListStore, extract_device_ids,
                       looks_like_device_list, mentions_device_token,
                       parse_device_input)
-from .runs import RunExecutor, RunRegistry
+from .runs import RunExecutor, RunRegistry, run_finished_text, MENU_KB
 from .telegram import Telegram
 
 MENU = "menu"

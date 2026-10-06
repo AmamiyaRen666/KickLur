@@ -32,7 +32,7 @@ def main_menu(n_devices, active_runs):
         f"loop <b>∞</b> · jeda <b>{cfg.BF_KICK_DELAY}s</b> · "
         f"worker <b>{cfg.BF_WORKERS}</b>"
     )
-    kb = {"inline_keyboard": [
+    kb = [
         [{"text": "▶️ START KICK", "callback_data": "start"}],
         [{"text": "➕ Tambah Device", "callback_data": "add"},
          {"text": "📋 Lihat List", "callback_data": "list"}],
@@ -41,7 +41,7 @@ def main_menu(n_devices, active_runs):
         [{"text": "🗑 Reset List", "callback_data": "reset"},
          {"text": "⚙️ Setelan", "callback_data": "settings"}],
         [{"text": "ℹ️ Info", "callback_data": "info"}],
-    ]}
+    ]
     return text, kb
 
 
@@ -92,7 +92,7 @@ def run_status(run):
     else:
         rows.append([{"text": "⏸ Pause semua", "callback_data": f"pauseall:{run.run_id}"}])
     rows.append([{"text": "🏠 Menu", "callback_data": "menu"}])
-    return "\n".join(lines), {"inline_keyboard": rows}
+    return "\n".join(lines), rows
 
 
 # ── device panel ──────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ def device_panel(run, page=0, per_page=8):
         ])
     rows.append([{"text": "📊 Status", "callback_data": f"st:{run.run_id}"},
                  {"text": "🏠 Menu", "callback_data": "menu"}])
-    return "\n".join(lines), {"inline_keyboard": rows}
+    return "\n".join(lines), rows
 
 
 def page_of_device(run, index, per_page=8):
@@ -210,7 +210,7 @@ def device_list_view(devices, page=0, budget=3000):
     if nav:
         kb_rows.append(nav)
     kb_rows.append([{"text": "🏠 Menu", "callback_data": "menu"}])
-    return "\n".join(out), {"inline_keyboard": kb_rows}
+    return "\n".join(out), kb_rows
 
 
 # ── info ──────────────────────────────────────────────────────────────────
@@ -230,7 +230,7 @@ def info_view():
         "<b>Arti tanda</b>\n"
         "🟢 jalan · ⏸ pause · ✅ pernah sukses · ⏹ dihapus"
     )
-    return text, {"inline_keyboard": [[{"text": "🏠 Menu", "callback_data": "menu"}]]}
+    return text, [[{"text": "🏠 Menu", "callback_data": "menu"}]]
 
 
 def help_text():
