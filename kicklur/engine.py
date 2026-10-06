@@ -54,13 +54,13 @@ class Login:
 
     def run(self):
         raw, md5, aid, adv = split_device_id(self.dev)
-        conn = Conn(cfg.HOST, cfg.PORT)
+        conn = Conn(cfg.KICK_HOST, cfg.KICK_PORT)
         try:
-            conn.open(timeout=cfg.OPEN_TIMEOUT)
+            conn.open(timeout=cfg.PROFILE_TIMEOUT)
             conn.send(1, SdpStruct({
                 0: raw,
                 1: f"gps_adid={adv}&android_id={aid}&device_unique_id={md5}",
-                2: cfg.VER, 3: cfg.CHAN, 4: cfg.LANG,
+                2: cfg.KICK_CLI_VERSION, 3: cfg.KICK_CHANNEL, 4: "en",
             }))
             pid, res = conn.recv()
             if pid != 2 or not res:
@@ -99,12 +99,12 @@ class Game:
     # -- source: login1() (login server side) -----------------------------
     def login1(self):
         raw, md5, aid, adv = split_device_id(self.dev)
-        self.conn = Conn(cfg.HOST, cfg.PORT)
-        self.conn.open(timeout=cfg.OPEN_TIMEOUT)
+        self.conn = Conn(cfg.KICK_HOST, cfg.KICK_PORT)
+        self.conn.open(timeout=cfg.PROFILE_TIMEOUT)
         self.conn.send(1, SdpStruct({
             0: raw,
             1: f"gps_adid={adv}&android_id={aid}&device_unique_id={md5}",
-            2: cfg.VER, 3: cfg.CHAN, 4: cfg.LANG,
+            2: cfg.KICK_CLI_VERSION, 3: cfg.KICK_CHANNEL, 4: "en",
         }))
         pid, res = self.conn.recv()
         if pid != 2 or not res:
@@ -141,7 +141,7 @@ class Game:
     def login2(self):
         self.conn.close()
         self.conn = Conn(self.gh, self.gp)
-        self.conn.open(timeout=cfg.OPEN_TIMEOUT)
+        self.conn.open(timeout=cfg.PROFILE_TIMEOUT)
         self.conn.send(10001, SdpStruct({
             0: self.acc, 1: self.skey, 2: self.zid,
             4: cfg.VER, 13: cfg.CHAN, 15: self.dev,
@@ -163,7 +163,7 @@ class Game:
         generous because a miss here is what used to produce a fake
         "Player_<acc>" name in the panel.
         """
-        tries = tries or cfg.LOOKUP_TRIES
+        tries = tries or 3
         for attempt in range(tries):
             self.conn.send(11153, SdpStruct({1: int(rid)}))
             for _ in range(4):
@@ -357,7 +357,7 @@ def fetch_profile(device_id, attempts=None):
     Returns a dict with acc/skey/zid/gh/gp/nick/skin/ban.
     Raises ProfileError when the device id cannot be resolved at all.
     """
-    attempts = attempts or cfg.FETCH_ATTEMPTS
+    attempts = attempts or cfg.PROFILE_ATTEMPTS
     last = None
     for _ in range(attempts):
         g = Game(device_id)

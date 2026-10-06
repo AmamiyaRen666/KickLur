@@ -51,13 +51,9 @@ class KickLurBot:
         active = len(REGISTRY.active_runs(chat_id))
         text, kb = ui.main_menu(n, active)
         if message_id:
-            r = self.tg.edit(chat_id, message_id, text, kb, parse_mode="HTML")
-            if r and r.get("ok"):
-                return message_id
-        r = self.tg.send(chat_id, text, kb, parse_mode="HTML")
-        if r and r.get("ok"):
-            return r["result"]["message_id"]
-        return None
+            self.tg.edit(chat_id, message_id, text, kb, parse_mode="HTML")
+            return message_id
+        return self.tg.send(chat_id, text, kb, parse_mode="HTML")
 
     def _show_run_status(self, run, message_id=None):
         """Render the status panel. Marks the message as showing 'status'."""
@@ -219,7 +215,7 @@ class KickLurBot:
         if size > 20 * 1024 * 1024:
             self.tg.send(chat_id, "❌ File terlalu besar (maks 20 MB).")
             return
-        data = self.tg.get_file(doc["file_id"])
+        data = self.tg.download(doc["file_id"], "uploads")
         if not data:
             self.tg.send(chat_id, "❌ Gagal ambil file dari Telegram.")
             return
@@ -250,11 +246,10 @@ class KickLurBot:
             return
         run = REGISTRY.create(chat_id, 0, ids, loops, delay)
         text, kb = ui.run_status(run)
-        r = self.tg.send(chat_id, text, kb, parse_mode="HTML")
-        if not r.get("ok"):
+        run.message_id = self.tg.send(chat_id, text, kb, parse_mode="HTML")
+        if not run.message_id:
             self.tg.send(chat_id, "❌ Gagal kirim pesan run.")
             return
-        run.message_id = r["result"]["message_id"]
         REGISTRY.start(run, want_lookup=cfg.BF_LOOKUP)
         self._watch(run, run.message_id)
 
@@ -264,7 +259,7 @@ class KickLurBot:
         data = q.get("data") or ""
         mid = q["message"]["message_id"]
         # answer first so the button never looks dead, then do the real work
-        self._bg(self.tg.answer_callback, q["id"])
+        self._bg(self.tg.answer, q["id"])
         if not self._allowed(chat_id):
             return
         self._bg(self._do_callback, chat_id, mid, data)
