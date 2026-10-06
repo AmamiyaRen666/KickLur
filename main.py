@@ -28,12 +28,21 @@ def _start_health_server(port):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_HEAD(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+
         def log_message(self, *args):
             pass
 
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    print(f"[KICKLUR] health endpoint on 0.0.0.0:{port}", flush=True)
+    try:
+        httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        httpd.daemon_threads = True
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        print(f"[KICKLUR] health endpoint on 0.0.0.0:{port}", flush=True)
+    except Exception as e:
+        print(f"[KICKLUR] health endpoint FAILED: {e}", flush=True)
 
 
 def main():
