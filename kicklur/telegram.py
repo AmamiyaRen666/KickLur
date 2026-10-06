@@ -121,6 +121,11 @@ class Telegram:
             return None
 
     # ── polling ────────────────────────────────────────────────────────────
+    def poll(self, offset=0, timeout=25):
+        """Long-poll for updates. Returns list of updates."""
+        r = self.get_updates(offset, timeout)
+        return r.get("result", []) if r.get("ok") else []
+
     def get_updates(self, offset, timeout=25):
         try:
             r = self.session.get(f"{self.base}/getUpdates",
