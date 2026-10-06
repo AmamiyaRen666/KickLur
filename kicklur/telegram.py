@@ -60,8 +60,8 @@ class Telegram:
         return data
 
     # ── convenience wrappers ───────────────────────────────────────────────
-    def send(self, chat_id, text, keyboard=None):
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    def send(self, chat_id, text, keyboard=None, parse_mode="HTML"):
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         if keyboard is not None:
             payload["reply_markup"] = {"inline_keyboard": keyboard}
         r = self.api("sendMessage", **payload)
