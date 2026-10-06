@@ -3,8 +3,17 @@
 Kept apart from bot.py so the message layout can be changed without touching
 dispatch logic.
 """
+import html
+import math
+import time
+
 from . import config as cfg
 from .runs import DONE, PAUSED, RUNNING, STOPPED
+
+PAGE_SIZE = 20
+LOOP_CHOICES = [5, 10, 25, 50, 100, 250, 500, 1000]
+BANNER = "💥 <b>KICKLUR</b> · BF Kicker"
+MENU_KB = [[{"text": "🏠 Menu", "callback_data": "menu"}]]
 
 
 def _short(text, max_len=34):
@@ -17,6 +26,214 @@ def _short(text, max_len=34):
     if max_len <= 3:
         return text[:max_len]
     return text[:max_len - 3] + "..."
+
+
+def home_text(device_count, active_runs):
+    if device_count:
+        tail = ("Sending more ids <b>adds</b> to the list — it never replaces it.\n"
+                "Use 🗑 Reset to start over.")
+    else:
+        tail = ("Send device ids as text (space/comma separated) or upload a .txt.\n"
+                "Send them in batches too — the list accumulates.")
+    runs = f"🟢 Run aktif: <b>{active_runs}</b>\n" if active_runs else ""
+    return (f"{BANNER}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"📱 Device di list: <b>{device_count}</b>\n"
+            f"{runs}\n"
+            f"{tail}")
+
+
+def home_kb(device_count, active_runs):
+    rows = []
+    if device_count:
+        rows.append([{"text": f"▶️ Mulai Kick ({device_count} device)",
+                      "callback_data": "loops"}])
+    if active_runs:
+        rows.append([{"text": f"📊 Run Aktif ({active_runs})",
+                      "callback_data": "runs"}])
+    if device_count:
+        rows.append([{"text": "🗑 Reset List", "callback_data": "reset"}])
+    rows.append([{"text": "🔄 Refresh", "callback_data": "menu"}])
+    return rows
+
+
+def loops_text(device_count):
+    return (f"🔁 <b>PILIH JUMLAH KICK</b>\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"📱 Device: <b>{device_count}</b>\n\n"
+            f"1 loop = <b>1 kick</b>. Device diputar bergantian.\n"
+            f"♾ Unlimited = jalan terus sampai kamu stop.")
+
+
+def loops_kb():
+    rows, row = [], []
+    for n in LOOP_CHOICES:
+        label = f"{n // 1000}K" if n >= 1000 else str(n)
+        row.append({"text": label, "callback_data": f"run:{n}"})
+        if len(row) == 4:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([{"text": "♾ Unlimited (stop manual)", "callback_data": "run:inf"}])
+    rows.append([{"text": "« Kembali", "callback_data": "menu"}])
+    return rows
+
+
+def _bar(done, total, w=20):
+    if not total:
+        return ""
+    pct = min(100, int(done / total * 100))
+    fill = int(w * pct / 100)
+    return f"<code>{'█' * fill}{'░' * (w - fill)}</code> {pct}%\n"
+
+
+def _results_block(snap, limit=8):
+    rows = snap.get("results") or []
+    if not rows:
+        return ""
+    lines = []
+    for dev, info in rows[:limit]:
+        mark = "✅" if info.get("ok") else "❌"
+        bits = []
+        acct = info.get("acct")
+        if acct is not None:
+            bits.append(f"<code>{html.escape(str(acct))}</code>")
+        name = info.get("name")
+        if name:
+            bits.append(f"「{html.escape(str(name))}」")
+        if not bits:
+            bits.append(f"<code>{_short(dev, 18)}</code>")
+        lines.append(f"  {mark} {' · '.join(bits)}")
+    more = f"\n  … +{len(rows) - limit} lagi" if len(rows) > limit else ""
+    return "📋 <b>Hasil:</b>\n" + "\n".join(lines) + more + "\n"
+
+
+def run_text(snap):
+    loops = "∞" if snap["loops"] == 0 else snap["loops"]
+    bar = _bar(snap["kicks"], snap["loops"])
+    results = _results_block(snap)
+    note = f"{snap['note']}\n" if snap["note"] else ""
+    err = f"\n{snap['last_err']}" if snap["last_err"] else ""
+    return (f"💥 <b>RUN #{snap['run_id']}</b> · {snap['devices']} device\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"{bar}"
+            f"🔁 Kick     : <b>{snap['kicks']}</b> / {loops}\n"
+            f"✅ Sukses    : <b>{snap['ok']}</b>\n"
+            f"❌ Gagal     : <b>{snap['fail']}</b>\n"
+            f"📱 Device jalan: <b>{snap['active']}</b> / {snap['devices']}\n"
+            f"⏱ Elapsed   : <b>{int(snap['elapsed'])}s</b>\n"
+            f"{note}\n"
+            f"{results}"
+            f"━━━━━━━━━━━━━━━\n"
+            f"<i>📊 Status = refresh · ⏹ STOP = stop menu</i>{err}")
+
+
+def run_kb(run_id):
+    return [[{"text": "📊 Status", "callback_data": f"status:{run_id}"},
+             {"text": "⏹ STOP", "callback_data": f"stopmenu:{run_id}"}],
+            [{"text": "🏠 Menu", "callback_data": f"status:{run_id}"}]]
+
+
+def run_finished_text(snap, reason):
+    loops = "∞" if snap["loops"] == 0 else snap["loops"]
+    head = {"done": "✅", "stopped": "⛔"}.get(reason, "💥")
+    label = {"done": "SELESAI", "stopped": "STOPPED", "empty": "KOSONG"}.get(reason, reason.upper())
+    others = snap.get("others", 0)
+    others_line = f"\n🟢 Run lain masih jalan: <b>{others}</b>" if others else ""
+    err = f"\n\n{snap['last_err']}" if snap["last_err"] else ""
+    paused_line = (f"\n⏸ Device di-pause: <b>{snap['paused']}</b>"
+                   if snap.get("paused") else "")
+    results = _results_block(snap)
+    return (f"{head} <b>RUN #{snap['run_id']} {label}</b>\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🔁 Kick     : <b>{snap['kicks']}</b> / {loops}\n"
+            f"✅ Sukses    : <b>{snap['ok']}</b>\n"
+            f"❌ Gagal     : <b>{snap['fail']}</b>\n"
+            f"📱 Device   : <b>{snap['devices']}</b>\n"
+            f"{others_line}{paused_line}{err}\n\n"
+            f"{results}")
+
+
+def runs_text(runs):
+    if not runs:
+        return (f"📊 <b>RUN AKTIF</b>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"❌ Tidak ada run yang jalan.")
+    now = time.time()
+    lines = []
+    for r in runs:
+        s = r.snapshot()
+        lines.append(f"  #{s['run_id']} · {s['active']}/{s['devices']} device"
+                     f" · {int(now - s['start'])}s · ⚡{s['kicks']}")
+    return (f"📊 <b>RUN AKTIF</b> ({len(runs)})\n"
+            f"━━━━━━━━━━━━━━━\n" + "\n".join(lines) +
+            "\n\nTap 📊 untuk lihat status lengkap run itu\n"
+            "(kick, sukses, gagal, hasil, device), atau ⏹ untuk stop device.")
+
+
+def runs_kb(runs):
+    rows = []
+    for r in runs:
+        s = r.snapshot()
+        rows.append([{"text": f"📊 #{s['run_id']} · {s['kicks']} kick · "
+                              f"✅{s['ok']} ❌{s['fail']}",
+                      "callback_data": f"status:{r.run_id}"}])
+        rows.append([{"text": f"⏹ Stop #{s['run_id']}",
+                      "callback_data": f"stopmenu:{r.run_id}"}])
+    if runs:
+        rows.append([{"text": "⛔ STOP SEMUA", "callback_data": "stopall"}])
+    rows.append([{"text": "« Kembali", "callback_data": "menu"}])
+    return rows
+
+
+def run_stop_text(run):
+    s = run.snapshot()
+    return (f"⏹ <b>DEVICE — RUN #{s['run_id']}</b>\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🟢 Jalan  : <b>{s['active']}</b>\n"
+            f"⏸ Pause  : <b>{s['paused']}</b>\n"
+            f"⏹ Stop   : <b>{s['stopped']}</b>  (permanen)\n"
+            f"📱 Total  : <b>{s['devices']}</b>\n\n"
+            f"Klik device untuk <b>pause / lanjut</b>.\n"
+            f"Pause itu sementara — klik lagi untuk jalan lagi.\n"
+            f"Run lain <b>tidak terpengaruh</b>.")
+
+
+def run_stop_kb(run, page=0):
+    devices = run.devices
+    stopped = run.stopped_set()
+    paused = run.paused_set()
+    kicked = run.kicked_set()
+    pages = max(1, math.ceil(len(devices) / PAGE_SIZE))
+    page = max(0, min(int(page), pages - 1))
+    start = page * PAGE_SIZE
+    rows = []
+    for i, did in list(enumerate(devices))[start:start + PAGE_SIZE]:
+        if did in stopped:
+            mark = "⏹"
+        elif did in paused:
+            mark = "⏸"
+        elif did in kicked:
+            mark = "✅"
+        else:
+            mark = "🟢"
+        rows.append([{"text": f"{mark} {i + 1}. {_short(did)}",
+                      "callback_data": f"toggle:{run.run_id}:{i}"}])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append({"text": "⬅️",
+                        "callback_data": f"stoppage:{run.run_id}:{page - 1}"})
+        nav.append({"text": f"{page + 1}/{pages}", "callback_data": "noop"})
+        if page < pages - 1:
+            nav.append({"text": "➡️",
+                        "callback_data": f"stoppage:{run.run_id}:{page + 1}"})
+        rows.append(nav)
+    rows.append([{"text": "⛔ STOP RUN INI", "callback_data": f"stoprun:{run.run_id}"}])
+    rows.append([{"text": "« Kembali", "callback_data": "runs"},
+                 {"text": "🏠 Menu", "callback_data": f"status:{run.run_id}"}])
+    return rows
 
 BAR = "─" * 34
 
