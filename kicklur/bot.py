@@ -29,6 +29,7 @@ class KickLurBot:
     def __init__(self, tg: Telegram):
         self.tg = tg
         self.devices = DeviceList()
+        self.offset = 0                # last processed update_id
         self.step = {}                 # chat_id -> wizard step
         self._pending_loops = {}       # chat_id -> loops chosen in the wizard
         self._watch_lock = threading.Lock()
