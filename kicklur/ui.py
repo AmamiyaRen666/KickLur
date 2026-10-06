@@ -6,6 +6,18 @@ dispatch logic.
 from . import config as cfg
 from .runs import DONE, PAUSED, RUNNING, STOPPED
 
+
+def _short(text, max_len=34):
+    """Truncate a long string (device id) to max_len chars with ellipsis."""
+    if not text:
+        return ""
+    text = str(text)
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    return text[:max_len - 3] + "..."
+
 BAR = "─" * 34
 
 
