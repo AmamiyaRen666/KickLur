@@ -278,12 +278,6 @@ class KickLurBot:
                 return
             did = run.devices[i]
             state = run.toggle_pause(did)
-            if state == "paused":
-                self.tg.send(chat_id, f"⏸ Device {i + 1} di-pause.")
-            elif state == "running":
-                self.tg.send(chat_id, f"▶️ Device {i + 1} jalan lagi.")
-            else:
-                self.tg.send(chat_id, f"⏹ Device {i + 1} sudah dihapus.")
             self._show_run_device_panel(run, mid, page=ui.page_of_device(run, i))
 
         elif data.startswith("pauseall:"):
