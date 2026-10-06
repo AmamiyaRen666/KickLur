@@ -88,7 +88,7 @@ def main():
 
     while True:
         try:
-            bot.poll_forever()
+            bot.poll()
         except KeyboardInterrupt:
             break
         except Exception as e:
