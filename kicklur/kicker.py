@@ -567,8 +567,10 @@ def kick_and_lookup(profile, want_name=None, timeout=None):
 
             # the nickname, on this same socket (free — no second kick)
             if want_name and name is None:
+                # 10101 = bancheck, 11153 = lookup nickname
+                # Don't wait for 10002 after 10101 — 10002 is the kick ACK,
+                # not a bancheck response. Just send both and wait for 11154.
                 conn.send_data(10101, SdpStruct({0: 0, 2: 2}))
-                _await(conn, {10002}, time.time() + timeout)
                 conn.send_data(11153, SdpStruct({1: int(acct or 0)}))
                 qpid, res = _await(conn, {11154}, time.time() + timeout)
                 if qpid == 11154:

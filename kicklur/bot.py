@@ -89,7 +89,10 @@ class KickLurBot:
             self._bg(self._add_devices, chat_id, text)
             return
 
-        self._bg(self._send_menu, chat_id)
+        # Teks biasa yang bukan device id — jangan spam menu.
+        # Cuma reply kalau teksnya terlalu pendek (kemungkinan perintah).
+        if len(text) < 50:
+            self._bg(self._send_menu, chat_id)
 
     def _on_command(self, chat_id, cmd):
         if cmd in ("start", "menu"):
@@ -169,7 +172,8 @@ class KickLurBot:
             executor = RunExecutor(run, math.inf, self.registry,
                                    on_finish=self._on_run_finish)
             executor.start()
-            self.devices.clear(chat_id)
+            # NOTE: jangan clear device list di sini — user masih butuh
+            # lihat/tambah device setelah run dimulai.
 
     def _on_run_finish(self, run):
         try:
