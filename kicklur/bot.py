@@ -210,7 +210,12 @@ class KickLurBot:
         self._bg(self.tg.answer, q["id"])
         if not self._allowed(chat_id):
             return
-        self._bg(self._do_callback, chat_id, mid, data)
+        # Handler alldev & togall di foreground — biar nggak ke-skip
+        # pas container restart/redeploy
+        if data.startswith("alldev:") or data.startswith("togall:"):
+            self._do_callback(chat_id, mid, data)
+        else:
+            self._bg(self._do_callback, chat_id, mid, data)
 
     def _do_callback(self, chat_id, mid, data):
         try:
