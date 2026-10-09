@@ -326,21 +326,29 @@ class KickLurBot:
 
         elif data.startswith("alldev:"):
             # Panel Semua Device — semua run sekaligus, pause dari mana aja
-            page = int(data.split(":")[1])
-            runs = self.registry.active(chat_id)
-            text, kb = ui.all_runs_device_panel(runs, page=page)
-            self.tg.edit(chat_id, mid, text, kb)
+            try:
+                page = int(data.split(":")[1])
+                runs = self.registry.active(chat_id)
+                text, kb = ui.all_runs_device_panel(runs, page=page)
+                self.tg.edit(chat_id, mid, text, kb)
+            except Exception as e:
+                print(f"[KICKLUR] alldev error: {type(e).__name__}: {e}", flush=True)
+                self.tg.send(chat_id, f"⚠️ Error buka panel: {type(e).__name__}: {e}")
 
         elif data.startswith("togall:"):
             # Toggle pause device di SEMUA run sekaligus
-            did = data.split(":", 1)[1]
-            runs = self.registry.active(chat_id)
-            for run in runs:
-                if did in run.devices:
-                    run.toggle_pause(did)
-            # Refresh panel
-            text, kb = ui.all_runs_device_panel(runs, page=0)
-            self.tg.edit(chat_id, mid, text, kb)
+            try:
+                did = data.split(":", 1)[1]
+                runs = self.registry.active(chat_id)
+                for run in runs:
+                    if did in run.devices:
+                        run.toggle_pause(did)
+                # Refresh panel
+                text, kb = ui.all_runs_device_panel(runs, page=0)
+                self.tg.edit(chat_id, mid, text, kb)
+            except Exception as e:
+                print(f"[KICKLUR] togall error: {type(e).__name__}: {e}", flush=True)
+                self.tg.send(chat_id, f"⚠️ Error pause: {type(e).__name__}: {e}")
 
         elif data == "noop":
             pass
