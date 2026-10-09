@@ -617,8 +617,7 @@ def kick_once(device_id, want_name=None):
     ok, ms, desc, name = kick_and_lookup(profile, want_name=want_name)
     if not ok:
         return False, f"❌ kick gagal: {desc}", profile
-    if name:
-        profile["name"] = name
+    profile["name"] = name or ""
     acct = profile.get("account_id")
     who = f"{acct} · {name}" if name else f"acct {acct}"
     return True, f"✅ {desc} · {ms:.0f}ms · {who}", profile

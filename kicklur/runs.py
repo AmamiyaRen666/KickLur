@@ -317,7 +317,6 @@ class RunExecutor(threading.Thread):
             # Share cursor antar worker: setiap worker mulai dari posisi
             # berbeda, jadi worker 0 ambil device[0], worker 1 ambil device[1],
             # dst. Kalau device[0] lagi in_flight, worker 0 skip ke device[1].
-            start_cursor = self._cursor
             for _ in range(n):
                 dev = self.job.devices[self._cursor]
                 self._cursor = (self._cursor + 1) % n
@@ -365,6 +364,9 @@ class RunExecutor(threading.Thread):
             return None
         got = _SLOTS.acquire(self.job.run_id, self.workers_cap)
         if not got:
+            # Acquire gagal (timeout) — return None TANPA refund.
+            # _worker() cuma refund kalau _kick() return None karena
+            # paused/stopped, bukan karena acquire gagal.
             return None
         try:
             # Re-check setelah acquire — device bisa di-pause saat nunggu slot
@@ -381,9 +383,8 @@ class RunExecutor(threading.Thread):
             _SLOTS.release(self.job.run_id)
 
     def _worker(self, worker_idx):
-        # Mulai dari cursor berbeda per worker biar device tersebar merata
-        with self._claim_lock:
-            self._cursor = worker_idx % max(1, len(self.job.devices))
+        # Cursor global berjalan natural — jangan overwrite per worker.
+        # Setiap worker mulai dari posisi cursor saat ini, lalu increment.
         while True:
             device, sentinel = self._next_device()
             if device is None:
