@@ -21,7 +21,7 @@ def _fmt_dur(sec):
 
 
 # ── main menu ─────────────────────────────────────────────────────────────
-def main_menu(n_devices, active_runs):
+def main_menu(n_devices, active_runs, runs=None):
     text = (
         "⚡ <b>KICKLUR</b> — BF Kicker\n"
         f"<code>{BAR}</code>\n"
@@ -42,6 +42,10 @@ def main_menu(n_devices, active_runs):
          {"text": "⚙️ Setelan", "callback_data": "settings"}],
         [{"text": "ℹ️ Info", "callback_data": "info"}],
     ]
+    # Tombol navigasi langsung di menu utama — pindah run tanpa scroll
+    if runs:
+        nav_rows = run_nav_buttons(runs, None)
+        kb.extend(nav_rows)
     return text, kb
 
 

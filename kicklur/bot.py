@@ -38,8 +38,8 @@ class KickLurBot:
 
     def _send_menu(self, chat_id, message_id=None):
         n = self.devices.count(chat_id)
-        active = len(self.registry.active(chat_id))
-        text, kb = ui.main_menu(n, active)
+        runs = self.registry.active(chat_id)
+        text, kb = ui.main_menu(n, len(runs), runs=runs)
         if message_id:
             self.tg.edit(chat_id, message_id, text, kb)
         else:
