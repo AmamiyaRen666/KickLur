@@ -27,6 +27,7 @@ class KickLurBot:
         self.registry = RunRegistry()
         self.offset = 0
         self._run_lock = threading.Lock()
+        self._alldev_map = {}
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _allowed(self, chat_id):
@@ -339,6 +340,16 @@ class KickLurBot:
                 print(f"[KICKLUR] alldev: {len(runs)} run aktif", flush=True)
                 text, kb = ui.all_runs_device_panel(runs, page=page)
                 print(f"[KICKLUR] alldev: panel dibuat, text={len(text)} chars, kb={len(kb)} rows", flush=True)
+                # Simpan mapping index -> device_id untuk handler togall
+                self._alldev_map = {}
+                seen = set()
+                idx = 0
+                for run in runs:
+                    for did in run.devices:
+                        if did not in seen:
+                            seen.add(did)
+                            self._alldev_map[idx] = did
+                            idx += 1
                 ok = self.tg.edit(chat_id, mid, text, kb)
                 print(f"[KICKLUR] alldev: edit result={ok}", flush=True)
                 if not ok:
@@ -351,7 +362,11 @@ class KickLurBot:
         elif data.startswith("togall:"):
             # Toggle pause device di SEMUA run sekaligus
             try:
-                did = data.split(":", 1)[1]
+                idx = int(data.split(":")[1])
+                did = self._alldev_map.get(idx)
+                if not did:
+                    print(f"[KICKLUR] togall: index {idx} nggak ada di map", flush=True)
+                    return
                 runs = self.registry.active(chat_id)
                 for run in runs:
                     if did in run.devices:

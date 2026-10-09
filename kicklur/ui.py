@@ -71,9 +71,10 @@ def all_runs_device_panel(runs, page=0, per_page=8):
     lines.append(f"<code>{BAR}</code>")
 
     rows = []
-    for e in chunk:
+    for i, e in enumerate(chunk, start=start):
+        # Gunakan index (bukan device ID) biar callback_data pendek & valid
         rows.append([{"text": f"{e['mark']} {e['acct']}",
-                      "callback_data": f"togall:{e['did']}"}])
+                      "callback_data": f"togall:{i}"}])
 
     if pages > 1:
         nav = []
