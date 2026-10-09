@@ -62,7 +62,7 @@ def run_header(run):
             f"<code>{BAR}</code>")
 
 
-def run_status(run):
+def run_status(run, active_runs=None):
     lines = [run_header(run)]
     prog = f"{run.kicks}/{run.loops}" if run.loops else f"{run.kicks}/∞"
     n_run = run.active_count()
@@ -92,6 +92,10 @@ def run_status(run):
     else:
         rows.append([{"text": "⏸ Pause semua", "callback_data": f"pauseall:{run.run_id}"}])
     rows.append([{"text": "🏠 Menu", "callback_data": "menu"}])
+    # Tombol navigasi ke run lain (biar user nggak perlu scroll ke atas)
+    if active_runs:
+        nav_rows = run_nav_buttons(active_runs, run.run_id)
+        rows.extend(nav_rows)
     return "\n".join(lines), rows
 
 
@@ -101,7 +105,21 @@ def page_of_device(run, index, per_page=8):
     return index // per_page
 
 
-def device_panel(run, page=0, per_page=8):
+def run_nav_buttons(active_runs, current_run_id):
+    """Buat tombol navigasi ke semua run aktif (untuk pindah run tanpa scroll)."""
+    if not active_runs:
+        return []
+    rows = []
+    nav = []
+    for r in active_runs:
+        label = f"#{r.run_id}" + (" ←" if r.run_id == current_run_id else "")
+        nav.append({"text": label, "callback_data": f"nav:{r.run_id}"})
+    if len(nav) > 1:
+        rows.append(nav)
+    return rows
+
+
+def device_panel(run, page=0, per_page=8, active_runs=None):
     """Per-device pause/resume panel with pagination."""
     devices = run.devices
     stopped = run.stopped_set()
@@ -116,7 +134,7 @@ def device_panel(run, page=0, per_page=8):
     chunk = devices[start:start + per_page]
 
     lines = [
-        f"📋 <b>Device</b> · Run #{run.run_id}\n"
+        f"📋 <b>Device</b> · <b>Run #{run.run_id}</b>\n"
         f"<code>{BAR}</code>\n"
         f"🟢 jalan <b>{n_run}</b> · ⏸ pause <b>{len(paused)}</b> · "
         f"⏹ hapus <b>{len(stopped)}</b> · total <b>{total}</b>\n"
@@ -168,6 +186,9 @@ def device_panel(run, page=0, per_page=8):
         rows.append(nav)
     rows.append([{"text": "📊 Status", "callback_data": f"st:{run.run_id}"},
                  {"text": "🏠 Menu", "callback_data": "menu"}])
+    # Tombol navigasi ke run lain (biar user nggak perlu scroll ke atas)
+    nav_rows = run_nav_buttons(active_runs, run.run_id)
+    rows.extend(nav_rows)
     return "\n".join(lines), rows
 
 

@@ -46,14 +46,16 @@ class KickLurBot:
             self.tg.send(chat_id, text, kb)
 
     def _show_run_status(self, run, message_id=None):
-        text, kb = ui.run_status(run)
+        active_runs = self.registry.active(run.chat_id)
+        text, kb = ui.run_status(run, active_runs=active_runs)
         if message_id:
             self.tg.edit(run.chat_id, message_id, text, kb)
         else:
             self.tg.send(run.chat_id, text, kb)
 
     def _show_run_device_panel(self, run, message_id, page=0):
-        text, kb = ui.device_panel(run, page=page)
+        active_runs = self.registry.active(run.chat_id)
+        text, kb = ui.device_panel(run, page=page, active_runs=active_runs)
         self.tg.edit(run.chat_id, message_id, text, kb)
 
     # ── dispatch ───────────────────────────────────────────────────────────
@@ -313,6 +315,13 @@ class KickLurBot:
             if run:
                 run.request_stop()
                 self.tg.send(chat_id, f"⛔ Run #{rid} dihentikan.")
+                self._show_run_status(run, mid)
+
+        elif data.startswith("nav:"):
+            # Navigasi ke run lain tanpa scroll
+            rid = int(data.split(":")[1])
+            run = self.registry.get(chat_id, rid)
+            if run:
                 self._show_run_status(run, mid)
 
         elif data == "noop":
