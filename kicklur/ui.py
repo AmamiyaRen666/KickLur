@@ -23,24 +23,18 @@ def _fmt_dur(sec):
 # ── main menu ─────────────────────────────────────────────────────────────
 def main_menu(n_devices, active_runs, runs=None):
     text = (
-        "⚡ <b>KICKLUR</b> — BF Kicker\n"
-        f"<code>{BAR}</code>\n"
-        f"📱 Device   : <b>{n_devices}</b>\n"
-        f"▶️ Run aktif: <b>{active_runs}</b>\n"
-        f"<code>{BAR}</code>\n"
-        f"START KICK langsung jalan:\n"
-        f"loop <b>∞</b> · jeda <b>{cfg.BF_KICK_DELAY}s</b> · "
-        f"worker <b>{cfg.BF_WORKERS}</b>"
+        "⚡ <b>KICKLUR</b>\n"
+        f"📱 <b>{n_devices}</b> device · ▶️ <b>{active_runs}</b> run aktif\n"
+        f"<code>{BAR}</code>"
     )
     kb = [
         [{"text": "▶️ START KICK", "callback_data": "start"}],
-        [{"text": "➕ Tambah Device", "callback_data": "add"},
-         {"text": "📋 Lihat List", "callback_data": "list"}],
+        [{"text": "➕ Tambah", "callback_data": "add"},
+         {"text": "📋 List", "callback_data": "list"}],
         [{"text": "📊 Status", "callback_data": "status"},
-         {"text": "⛔ STOP SEMUA", "callback_data": "stopall"}],
-        [{"text": "🗑 Reset List", "callback_data": "reset"},
-         {"text": "⚙️ Setelan", "callback_data": "settings"}],
-        [{"text": "ℹ️ Info", "callback_data": "info"}],
+         {"text": "⛔ Stop", "callback_data": "stopall"}],
+        [{"text": "🗑 Reset", "callback_data": "reset"},
+         {"text": "ℹ️ Info", "callback_data": "info"}],
     ]
     # Tombol navigasi langsung di menu utama — pindah run tanpa scroll
     if runs:
