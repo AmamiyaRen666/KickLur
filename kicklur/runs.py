@@ -356,29 +356,33 @@ class RunExecutor(threading.Thread):
                 self._claimed -= 1
 
     def _kick(self, device):
+        """Returns (result_or_None, reason).
+
+        reason: 'ok' | 'paused' | 'stopped' | 'acquire_fail'
+        - 'ok': kick selesai, result = (ok, msg, profile)
+        - 'paused'/'stopped': device di-pause/stop — worker harus refund
+        - 'acquire_fail': slot timeout — worker JANGAN refund
+        """
         # Cek paused SEBELUM acquire slot — kalau paused, jangan acquire
         # slot sama sekali. Ini bikin pause langsung efek tanpa nunggu slot.
         if not self.job.alive or self.job.is_stopped(device):
-            return None
+            return None, 'stopped'
         if self.job.is_paused(device):
-            return None
+            return None, 'paused'
         got = _SLOTS.acquire(self.job.run_id, self.workers_cap)
         if not got:
-            # Acquire gagal (timeout) — return None TANPA refund.
-            # _worker() cuma refund kalau _kick() return None karena
-            # paused/stopped, bukan karena acquire gagal.
-            return None
+            return None, 'acquire_fail'
         try:
             # Re-check setelah acquire — device bisa di-pause saat nunggu slot
             if not self.job.alive or self.job.is_stopped(device):
-                return None
+                return None, 'stopped'
             if self.job.is_paused(device):
-                return None
+                return None, 'paused'
             try:
                 ok, msg, profile = kick_once(device)
             except Exception as e:
                 ok, msg, profile = False, f"❌ {type(e).__name__}: {e}", None
-            return ok, msg, profile
+            return (ok, msg, profile), 'ok'
         finally:
             _SLOTS.release(self.job.run_id)
 
@@ -393,10 +397,12 @@ class RunExecutor(threading.Thread):
                         return
                     continue
                 return
-            result = self._kick(device)
+            result, reason = self._kick(device)
             self._release_device(device)
             if result is None:
-                self._refund()
+                # Refund cuma kalau paused/stopped — bukan acquire_fail.
+                if reason in ('paused', 'stopped'):
+                    self._refund()
                 continue
             ok, msg, profile = result
             self.job.record(device, ok, msg, profile)
