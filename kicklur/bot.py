@@ -332,19 +332,13 @@ class KickLurBot:
             self.tg.edit(chat_id, mid, text, kb)
 
         elif data.startswith("togall:"):
-            # Toggle pause device dari panel semua run
-            _, rid, idx = data.split(":")
-            run = self.registry.get(chat_id, int(rid))
-            if not run:
-                return
-            i = int(idx)
-            if not (0 <= i < len(run.devices)):
-                self.tg.send(chat_id, "⚠️ Device itu nggak ada lagi di run ini.")
-                return
-            did = run.devices[i]
-            run.toggle_pause(did)
-            # Refresh panel
+            # Toggle pause device di SEMUA run sekaligus
+            did = data.split(":", 1)[1]
             runs = self.registry.active(chat_id)
+            for run in runs:
+                if did in run.devices:
+                    run.toggle_pause(did)
+            # Refresh panel
             text, kb = ui.all_runs_device_panel(runs, page=0)
             self.tg.edit(chat_id, mid, text, kb)
 

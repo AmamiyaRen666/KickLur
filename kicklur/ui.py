@@ -21,15 +21,15 @@ def _fmt_dur(sec):
 
 
 # ── main menu ─────────────────────────────────────────────────────────────
-def all_runs_device_panel(runs, page=0, per_page=6):
-    """Panel yang menampilkan SEMUA run + device sekaligus.
-    User bisa pause device dari run mana aja tanpa pindah run.
+def all_runs_device_panel(runs, page=0, per_page=8):
+    """Panel gabungan semua device dari semua run.
+    Device ID sama cuma muncul 1 kali. Pause efek ke semua run.
     """
     if not runs:
         return "Belum ada run aktif.", [[{"text": "🏠 Menu", "callback_data": "menu"}]]
 
-    # Kumpulkan semua device dari semua run
-    all_entries = []  # [(run_id, device_index, device_id, mark, acct, name)]
+    # Kumpulkan device unik (device_id -> best mark/acct/name)
+    seen = {}  # device_id -> {"mark", "acct", "name", "runs": [(run_id, idx)]}
     for run in runs:
         stopped = run.stopped_set()
         paused = run.paused_set()
@@ -48,44 +48,32 @@ def all_runs_device_panel(runs, page=0, per_page=6):
             name = info.get("name")
             acct_str = str(acct) if acct is not None else "—"
             name_str = name if name else ("belum dicek" if did not in kicked else "?")
-            all_entries.append({
-                "run_id": run.run_id,
-                "i": i,
-                "did": did,
-                "mark": mark,
-                "acct": acct_str,
-                "name": name_str,
-            })
+            if did not in seen:
+                seen[did] = {"did": did, "mark": mark, "acct": acct_str, "name": name_str, "runs": []}
+            seen[did]["runs"].append((run.run_id, i))
 
-    total = len(all_entries)
+    entries = list(seen.values())
+    total = len(entries)
     pages = max(1, (total + per_page - 1) // per_page)
     page = max(0, min(page, pages - 1))
     start = page * per_page
-    chunk = all_entries[start:start + per_page]
+    chunk = entries[start:start + per_page]
 
+    n_pause = sum(1 for e in chunk if e["mark"] == "⏸")
     lines = [
-        f"📋 <b>Semua Device</b> · {len(runs)} run · {total} device\n"
+        f"📋 <b>Semua Device</b> · {total} device · ⏸{n_pause} pause\n"
         f"<code>{BAR}</code>"
     ]
 
-    current_run = None
     for e in chunk:
-        if e["run_id"] != current_run:
-            current_run = e["run_id"]
-            run = next(r for r in runs if r.run_id == current_run)
-            n_run = run.active_count()
-            n_pause = len(run.paused_set())
-            lines.append(f"\n<b>Run #{current_run}</b> · 🟢{n_run} ⏸{n_pause}")
-        # Compact: 1 baris per device, tombol = pause/lanjut
         lines.append(f"{e['mark']} {e['acct']} | {e['name'][:20]}")
 
     lines.append(f"<code>{BAR}</code>")
 
     rows = []
     for e in chunk:
-        # Compact button: mark + acct only
         rows.append([{"text": f"{e['mark']} {e['acct']}",
-                      "callback_data": f"togall:{e['run_id']}:{e['i']}"}])
+                      "callback_data": f"togall:{e['did']}"}])
 
     if pages > 1:
         nav = []
