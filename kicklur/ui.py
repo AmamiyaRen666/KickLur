@@ -65,8 +65,6 @@ def all_runs_device_panel(runs, page=0, per_page=6):
 
     lines = [
         f"📋 <b>Semua Device</b> · {len(runs)} run · {total} device\n"
-        f"<code>{BAR}</code>\n"
-        f"hal {page + 1}/{pages} · <b>klik tombol = pause/lanjut</b>\n"
         f"<code>{BAR}</code>"
     ]
 
@@ -74,19 +72,20 @@ def all_runs_device_panel(runs, page=0, per_page=6):
     for e in chunk:
         if e["run_id"] != current_run:
             current_run = e["run_id"]
-            # Hitung stats untuk run ini
             run = next(r for r in runs if r.run_id == current_run)
             n_run = run.active_count()
             n_pause = len(run.paused_set())
             lines.append(f"\n<b>Run #{current_run}</b> · 🟢{n_run} ⏸{n_pause}")
-        lines.append(f"{e['mark']} {e['acct']} | {e['name']}")
+        # Compact: 1 baris per device, tombol = pause/lanjut
+        lines.append(f"{e['mark']} {e['acct']} | {e['name'][:20]}")
 
     lines.append(f"<code>{BAR}</code>")
 
     rows = []
     for e in chunk:
-        label = f"{e['mark']} R{e['run_id']}: {e['acct']} · {e['name'][:12]}"
-        rows.append([{"text": label, "callback_data": f"togall:{e['run_id']}:{e['i']}"}])
+        # Compact button: mark + acct only
+        rows.append([{"text": f"{e['mark']} {e['acct']}",
+                      "callback_data": f"togall:{e['run_id']}:{e['i']}"}])
 
     if pages > 1:
         nav = []
