@@ -308,13 +308,16 @@ class RunExecutor(threading.Thread):
         with self._claim_lock:
             if not self.job.alive:
                 return None, None
-            # FIX: only check budget if loops is not infinite
             if self.loops != math.inf and self._claimed >= self.loops:
                 return None, None
             n = len(self.job.devices)
             if n == 0:
                 return None, None
             cooling = False
+            # Share cursor antar worker: setiap worker mulai dari posisi
+            # berbeda, jadi worker 0 ambil device[0], worker 1 ambil device[1],
+            # dst. Kalau device[0] lagi in_flight, worker 0 skip ke device[1].
+            start_cursor = self._cursor
             for _ in range(n):
                 dev = self.job.devices[self._cursor]
                 self._cursor = (self._cursor + 1) % n
@@ -329,12 +332,14 @@ class RunExecutor(threading.Thread):
                 self._in_flight.add(dev)
                 self.job.set_passes(self._claimed // n)
                 return dev, None
+            # Semua device lagi busy (in_flight atau cooling) — tunggu sebentar
             if self._in_flight or cooling:
                 soonest = min([self._device_next.get(d, 0.0)
                                for d in self.job.devices] or [0.0])
                 hint = soonest - time.time() if soonest > time.time() else 0.05
                 self._wait_hint = max(0.02, min(hint, 0.25))
                 return None, _WAIT
+            # Semua device di-pause atau dihapus
             if self.job.has_paused():
                 self.job.note = "semua device di-pause"
                 return None, _WAIT
@@ -375,7 +380,10 @@ class RunExecutor(threading.Thread):
         finally:
             _SLOTS.release(self.job.run_id)
 
-    def _worker(self):
+    def _worker(self, worker_idx):
+        # Mulai dari cursor berbeda per worker biar device tersebar merata
+        with self._claim_lock:
+            self._cursor = worker_idx % max(1, len(self.job.devices))
         while True:
             device, sentinel = self._next_device()
             if device is None:
@@ -399,8 +407,8 @@ class RunExecutor(threading.Thread):
         _register_run(+1)
         try:
             threads = []
-            for _ in range(self.workers):
-                t = threading.Thread(target=self._worker, daemon=True)
+            for i in range(self.workers):
+                t = threading.Thread(target=self._worker, args=(i,), daemon=True)
                 t.start()
                 threads.append(t)
             for t in threads:
