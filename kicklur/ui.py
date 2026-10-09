@@ -96,6 +96,11 @@ def run_status(run):
 
 
 # ── device panel ──────────────────────────────────────────────────────────
+def page_of_device(run, index, per_page=8):
+    """Return page number that contains the given device index."""
+    return index // per_page
+
+
 def device_panel(run, page=0, per_page=8):
     """Per-device pause/resume panel with pagination."""
     devices = run.devices

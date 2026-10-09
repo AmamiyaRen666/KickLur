@@ -87,7 +87,10 @@ class KickLurBot:
 
         # Cuma parse sebagai device list kalau semua token valid
         if looks_like_device_list(text):
-            self._bg(self._add_devices, chat_id, text)
+            # Parse sekali di sini, pass result ke _add_devices biar nggak
+            # double-parse. _add_devices tetap backward-compatible dengan string.
+            parsed, _ = parse_device_input(text)
+            self._bg(self._add_devices, chat_id, parsed)
             return
 
         # Teks biasa — jangan spam menu untuk setiap pesan.
@@ -282,8 +285,9 @@ class KickLurBot:
                 self.tg.send(chat_id, "⚠️ Device itu nggak ada lagi di run ini.")
                 return
             did = run.devices[i]
-            state = run.toggle_pause(did)
-            self._show_run_device_panel(run, mid)
+            run.toggle_pause(did)
+            # Tampilkan ulang panel di halaman yang sama (device sama, page sama)
+            self._show_run_device_panel(run, mid, page=ui.page_of_device(run, i))
 
         elif data.startswith("pauseall:"):
             rid = int(data.split(":")[1])
