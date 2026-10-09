@@ -21,6 +21,86 @@ def _fmt_dur(sec):
 
 
 # ── main menu ─────────────────────────────────────────────────────────────
+def all_runs_device_panel(runs, page=0, per_page=6):
+    """Panel yang menampilkan SEMUA run + device sekaligus.
+    User bisa pause device dari run mana aja tanpa pindah run.
+    """
+    if not runs:
+        return "Belum ada run aktif.", [[{"text": "🏠 Menu", "callback_data": "menu"}]]
+
+    # Kumpulkan semua device dari semua run
+    all_entries = []  # [(run_id, device_index, device_id, mark, acct, name)]
+    for run in runs:
+        stopped = run.stopped_set()
+        paused = run.paused_set()
+        kicked = run.kicked_set()
+        for i, did in enumerate(run.devices):
+            if did in stopped:
+                mark = "⏹"
+            elif did in paused:
+                mark = "⏸"
+            elif did in kicked:
+                mark = "✅"
+            else:
+                mark = "🟢"
+            info = run.results.get(did, {})
+            acct = info.get("acct")
+            name = info.get("name")
+            acct_str = str(acct) if acct is not None else "—"
+            name_str = name if name else ("belum dicek" if did not in kicked else "?")
+            all_entries.append({
+                "run_id": run.run_id,
+                "i": i,
+                "did": did,
+                "mark": mark,
+                "acct": acct_str,
+                "name": name_str,
+            })
+
+    total = len(all_entries)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    start = page * per_page
+    chunk = all_entries[start:start + per_page]
+
+    lines = [
+        f"📋 <b>Semua Device</b> · {len(runs)} run · {total} device\n"
+        f"<code>{BAR}</code>\n"
+        f"hal {page + 1}/{pages} · <b>klik tombol = pause/lanjut</b>\n"
+        f"<code>{BAR}</code>"
+    ]
+
+    current_run = None
+    for e in chunk:
+        if e["run_id"] != current_run:
+            current_run = e["run_id"]
+            # Hitung stats untuk run ini
+            run = next(r for r in runs if r.run_id == current_run)
+            n_run = run.active_count()
+            n_pause = len(run.paused_set())
+            lines.append(f"\n<b>Run #{current_run}</b> · 🟢{n_run} ⏸{n_pause}")
+        lines.append(f"{e['mark']} {e['acct']} | {e['name']}")
+
+    lines.append(f"<code>{BAR}</code>")
+
+    rows = []
+    for e in chunk:
+        label = f"{e['mark']} R{e['run_id']}: {e['acct']} · {e['name'][:12]}"
+        rows.append([{"text": label, "callback_data": f"togall:{e['run_id']}:{e['i']}"}])
+
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append({"text": "« Prev", "callback_data": f"alldev:{page-1}"})
+        nav.append({"text": f"{page+1}/{pages}", "callback_data": "noop"})
+        if page < pages - 1:
+            nav.append({"text": "Next »", "callback_data": f"alldev:{page+1}"})
+        rows.append(nav)
+
+    rows.append([{"text": "🏠 Menu", "callback_data": "menu"}])
+    return "\n".join(lines), rows
+
+
 def main_menu(n_devices, active_runs, runs=None):
     text = (
         "⚡ <b>KICKLUR</b>\n"
@@ -31,15 +111,12 @@ def main_menu(n_devices, active_runs, runs=None):
         [{"text": "▶️ START KICK", "callback_data": "start"}],
         [{"text": "➕ Tambah", "callback_data": "add"},
          {"text": "📋 List", "callback_data": "list"}],
+        [{"text": "📋 Semua Device", "callback_data": "alldev:0"}],
         [{"text": "📊 Status", "callback_data": "status"},
          {"text": "⛔ Stop", "callback_data": "stopall"}],
         [{"text": "🗑 Reset", "callback_data": "reset"},
          {"text": "ℹ️ Info", "callback_data": "info"}],
     ]
-    # Tombol navigasi langsung di menu utama — pindah run tanpa scroll
-    if runs:
-        nav_rows = run_nav_buttons(runs, None)
-        kb.extend(nav_rows)
     return text, kb
 
 
