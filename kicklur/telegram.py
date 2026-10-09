@@ -77,6 +77,8 @@ class Telegram:
         elif keyboard is None:
             payload["reply_markup"] = {"inline_keyboard": []}
         r = self.api("editMessageText", **payload)
+        if not r.get("ok"):
+            print(f"[KICKLUR] editMessageText gagal: {r}", flush=True)
         return r.get("ok", False)
 
     def answer(self, callback_id, text="", alert=False):
