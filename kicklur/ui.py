@@ -96,8 +96,8 @@ def run_status(run):
 
 
 # ── device panel ──────────────────────────────────────────────────────────
-def device_panel(run):
-    """Per-device pause/resume panel. All devices in one list, no pagination."""
+def device_panel(run, page=0, per_page=8):
+    """Per-device pause/resume panel with pagination."""
     devices = run.devices
     stopped = run.stopped_set()
     paused = run.paused_set()
@@ -105,14 +105,20 @@ def device_panel(run):
     total = len(devices)
 
     n_run = total - len(stopped) - len(paused)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    start = page * per_page
+    chunk = devices[start:start + per_page]
+
     lines = [
         f"📋 <b>Device</b> · Run #{run.run_id}\n"
         f"<code>{BAR}</code>\n"
         f"🟢 jalan <b>{n_run}</b> · ⏸ pause <b>{len(paused)}</b> · "
         f"⏹ hapus <b>{len(stopped)}</b> · total <b>{total}</b>\n"
+        f"hal {page + 1}/{pages} · <b>klik tombol = pause/lanjut</b>\n"
         f"<code>{BAR}</code>"
     ]
-    for i, did in enumerate(devices):
+    for i, did in enumerate(chunk, start=start):
         if did in stopped:
             mark = "⏹"
         elif did in paused:
@@ -129,10 +135,9 @@ def device_panel(run):
         lines.append(f"{mark} {i + 1}. {acct_str} | {name_str}")
         lines.append(f"   <code>{html.escape(did)}</code>")
     lines.append(f"<code>{BAR}</code>")
-    lines.append("<b>Klik tombol device → pause/lanjut.</b>")
 
     rows = []
-    for i, did in enumerate(devices):
+    for i, did in enumerate(chunk, start=start):
         if did in stopped:
             mark = "⏹"
         elif did in paused:
@@ -148,6 +153,14 @@ def device_panel(run):
         name_str = name if name else ("belum dicek" if did not in kicked else "?")
         label = f"{mark} {i + 1}. {acct_str} · {name_str[:14]}"
         rows.append([{"text": label, "callback_data": f"tog:{run.run_id}:{i}"}])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append({"text": "« Prev", "callback_data": f"dev:{run.run_id}:{page-1}"})
+        nav.append({"text": f"{page+1}/{pages}", "callback_data": "noop"})
+        if page < pages - 1:
+            nav.append({"text": "Next »", "callback_data": f"dev:{run.run_id}:{page+1}"})
+        rows.append(nav)
     rows.append([{"text": "📊 Status", "callback_data": f"st:{run.run_id}"},
                  {"text": "🏠 Menu", "callback_data": "menu"}])
     return "\n".join(lines), rows

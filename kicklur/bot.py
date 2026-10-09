@@ -52,8 +52,8 @@ class KickLurBot:
         else:
             self.tg.send(run.chat_id, text, kb)
 
-    def _show_run_device_panel(self, run, message_id):
-        text, kb = ui.device_panel(run)
+    def _show_run_device_panel(self, run, message_id, page=0):
+        text, kb = ui.device_panel(run, page=page)
         self.tg.edit(run.chat_id, message_id, text, kb)
 
     # ── dispatch ───────────────────────────────────────────────────────────
@@ -85,12 +85,13 @@ class KickLurBot:
             self._bg(self._add_devices, chat_id, ids)
             return
 
-        if looks_like_device_list(text) or mentions_device_token(text):
+        # Cuma parse sebagai device list kalau semua token valid
+        if looks_like_device_list(text):
             self._bg(self._add_devices, chat_id, text)
             return
 
-        # Teks biasa yang bukan device id — jangan spam menu.
-        # Cuma reply kalau teksnya terlalu pendek (kemungkinan perintah).
+        # Teks biasa — jangan spam menu untuk setiap pesan.
+        # Cuma reply kalau teksnya pendek (kemungkinan perintah).
         if len(text) < 50:
             self._bg(self._send_menu, chat_id)
 
@@ -267,8 +268,9 @@ class KickLurBot:
         elif data.startswith("dev:"):
             parts = data.split(":")
             run = self.registry.get(chat_id, int(parts[1]))
+            page = int(parts[2]) if len(parts) > 2 else 0
             if run:
-                self._show_run_device_panel(run, mid)
+                self._show_run_device_panel(run, mid, page=page)
 
         elif data.startswith("tog:"):
             _, rid, idx = data.split(":")

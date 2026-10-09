@@ -352,10 +352,17 @@ class RunExecutor(threading.Thread):
                 self._claimed -= 1
 
     def _kick(self, device):
+        # Cek paused SEBELUM acquire slot — kalau paused, jangan acquire
+        # slot sama sekali. Ini bikin pause langsung efek tanpa nunggu slot.
+        if not self.job.alive or self.job.is_stopped(device):
+            return None
+        if self.job.is_paused(device):
+            return None
         got = _SLOTS.acquire(self.job.run_id, self.workers_cap)
         if not got:
             return None
         try:
+            # Re-check setelah acquire — device bisa di-pause saat nunggu slot
             if not self.job.alive or self.job.is_stopped(device):
                 return None
             if self.job.is_paused(device):
