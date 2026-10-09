@@ -328,10 +328,14 @@ class KickLurBot:
         elif data.startswith("alldev:"):
             # Panel Semua Device — semua run sekaligus, pause dari mana aja
             try:
+                print(f"[KICKLUR] alldev: mulai", flush=True)
                 page = int(data.split(":")[1])
                 runs = self.registry.active(chat_id)
+                print(f"[KICKLUR] alldev: {len(runs)} run aktif", flush=True)
                 text, kb = ui.all_runs_device_panel(runs, page=page)
+                print(f"[KICKLUR] alldev: panel dibuat, edit message", flush=True)
                 self.tg.edit(chat_id, mid, text, kb)
+                print(f"[KICKLUR] alldev: selesai", flush=True)
             except Exception as e:
                 print(f"[KICKLUR] alldev error: {type(e).__name__}: {e}", flush=True)
                 self.tg.send(chat_id, f"⚠️ Error buka panel: {type(e).__name__}: {e}")
