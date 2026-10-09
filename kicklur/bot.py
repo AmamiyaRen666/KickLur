@@ -338,11 +338,12 @@ class KickLurBot:
                 runs = self.registry.active(chat_id)
                 print(f"[KICKLUR] alldev: {len(runs)} run aktif", flush=True)
                 text, kb = ui.all_runs_device_panel(runs, page=page)
-                print(f"[KICKLUR] alldev: panel dibuat, edit message", flush=True)
+                print(f"[KICKLUR] alldev: panel dibuat, text={len(text)} chars, kb={len(kb)} rows", flush=True)
                 ok = self.tg.edit(chat_id, mid, text, kb)
                 print(f"[KICKLUR] alldev: edit result={ok}", flush=True)
                 if not ok:
-                    print(f"[KICKLUR] alldev: editMessageText GAGAL", flush=True)
+                    print(f"[KICKLUR] alldev: editMessageText GAGAL — coba send baru", flush=True)
+                    self.tg.send(chat_id, text, kb)
             except Exception as e:
                 print(f"[KICKLUR] alldev error: {type(e).__name__}: {e}", flush=True)
                 self.tg.send(chat_id, f"⚠️ Error buka panel: {type(e).__name__}: {e}")
