@@ -92,18 +92,17 @@ def all_runs_device_panel(runs, page=0, per_page=8):
 def main_menu(n_devices, active_runs, runs=None):
     text = (
         "⚡ <b>KICKLUR</b>\n"
-        f"📱 <b>{n_devices}</b> device · ▶️ <b>{active_runs}</b> run aktif\n"
-        f"<code>{BAR}</code>"
+        f"<code>{BAR}</code>\n"
+        f"📱 <b>{n_devices}</b> device · ▶️ <b>{active_runs}</b> run"
     )
     kb = [
         [{"text": "▶️ START KICK", "callback_data": "start"}],
-        [{"text": "➕ Tambah", "callback_data": "add"},
-         {"text": "📋 List", "callback_data": "list"}],
-        [{"text": "📋 Semua Device", "callback_data": "alldev:0"}],
+        [{"text": "➕ Tambah Device", "callback_data": "add"},
+         {"text": "📋 Semua Device", "callback_data": "alldev:0"}],
         [{"text": "📊 Status", "callback_data": "status"},
-         {"text": "⛔ Stop", "callback_data": "stopall"}],
-        [{"text": "🗑 Reset", "callback_data": "reset"},
-         {"text": "ℹ️ Info", "callback_data": "info"}],
+         {"text": "⛔ Stop Semua", "callback_data": "stopall"}],
+        [{"text": "ℹ️ Info", "callback_data": "info"},
+         {"text": "🗑 Reset", "callback_data": "reset"}],
     ]
     return text, kb
 
