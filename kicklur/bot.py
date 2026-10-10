@@ -252,28 +252,6 @@ class KickLurBot:
             self.tg.send(chat_id, f"⛔ {n} run distop.")
             self._send_menu(chat_id, mid)
 
-        elif data == "quickpause":
-            # Pause SEMUA device di SEMUA run sekaligus — cepat dari menu
-            runs = self.registry.active(chat_id)
-            n = 0
-            for run in runs:
-                for d in run.devices:
-                    if run.pause_device(d):
-                        n += 1
-            self.tg.send(chat_id, f"⏸ {n} device dipause.")
-            self._send_menu(chat_id, mid)
-
-        elif data == "quickresume":
-            # Lanjut SEMUA device di SEMUA run sekaligus — cepat dari menu
-            runs = self.registry.active(chat_id)
-            n = 0
-            for run in runs:
-                for d in run.devices:
-                    if run.resume_device(d):
-                        n += 1
-            self.tg.send(chat_id, f"▶️ {n} device dilanjut.")
-            self._send_menu(chat_id, mid)
-
         elif data == "info":
             text, kb = ui.info_view()
             self.tg.edit(chat_id, mid, text, kb)
