@@ -99,11 +99,20 @@ def main_menu(n_devices, active_runs, runs=None):
         [{"text": "▶️ START KICK", "callback_data": "start"}],
         [{"text": "➕ Tambah Device", "callback_data": "add"},
          {"text": "📋 Semua Device", "callback_data": "alldev:0"}],
+    ]
+    # Tombol pause cepat di menu utama — pause/resume semua device sekaligus
+    if runs:
+        any_paused = any(r.has_paused() for r in runs)
+        if any_paused:
+            kb.append([{"text": "▶️ Lanjut Semua", "callback_data": "quickresume"}])
+        else:
+            kb.append([{"text": "⏸ Pause Semua", "callback_data": "quickpause"}])
+    kb.extend([
         [{"text": "📊 Status", "callback_data": "status"},
          {"text": "⛔ Stop Semua", "callback_data": "stopall"}],
         [{"text": "ℹ️ Info", "callback_data": "info"},
          {"text": "🗑 Reset", "callback_data": "reset"}],
-    ]
+    ])
     return text, kb
 
 
